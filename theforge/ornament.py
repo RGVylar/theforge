@@ -1,24 +1,27 @@
 """Ornamento procedural y composicion de bandas para la esfera.
 
-No hay ninguna imagen de partida: todo se dibuja con curvas de curvatura
-constante. La pieza basica es siempre la misma —una espina que se enrolla con
-lobulos alternos que menguan hacia la punta— y lo que cambia de un estilo a
-otro son cuatro numeros:
+No hay ninguna imagen de partida: todo se dibuja resolviendo contornos.
 
-    punta         si el lobulo acaba romo (hoja) o afilado (pincho)
-    giro_lobulo   cuanto se enrosca antes de acabar
-    capas         cuantas pasadas de hojas y a que tamano, o sea la densidad
-    ancho         el grosor del trazo
+Cada pieza (una hoja, una lamina) se construye igual: una espina curva, un
+perfil de ancho a lo largo de ella, y un borde que puede ir festoneado. Con eso
+se arma un poligono cerrado -desplazando la espina a un lado y a otro por la
+normal- y se rellena. Dibujar siluetas y no trazos es lo que separa una hoja de
+un churro: un trazo grueso no tiene punta, ni lobulos, ni sitio donde meter las
+nervaduras.
 
-Con eso, el mismo codigo da acanto barroco recargado o tribal a lo tatuaje. El
-barroco no es acanto "fino": es acanto en cuatro capas hasta que no queda hueco,
-porque el horror vacui es el estilo, no un exceso del estilo.
+Tres cosas hacen que el relieve se lea, y las tres importan:
+
+    canto      cada pieza lleva su contorno en un gris intermedio, de modo que
+               al solaparse no se funden en una mancha: se ve cual va delante.
+    nervios    lineas finas hacia la punta de cada lobulo. Es lo que convierte
+               una silueta en una hoja.
+    perfil     como mengua el ancho. Lento y con lobulos da acanto; rapido y
+               liso da lamina afilada. El mismo codigo, otro perfil.
 
 Todo determinista: la misma llamada da siempre el mismo dibujo.
 
 Convenio de grises, el mismo que en lito: oscuro = grueso. El fondo va claro
-para que la lampara ilumine y el ornamento oscuro para que se lea como relieve
-contra el fondo encendido.
+para que la lampara ilumine y el ornamento oscuro para que se lea como relieve.
 """
 
 from __future__ import annotations
@@ -30,8 +33,9 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 FONDO = 205  # gris del fondo: pared fina, pero no la minima
-TINTA = 25  # gris del ornamento: casi el grosor maximo
-SUPERMUESTREO = 2  # se dibuja al doble y se reduce, que es el antialias
+TINTA = 25  # cuerpo del ornamento: casi el grosor maximo
+CANTO = 115  # contorno y nervaduras: a media altura, para que hagan sombra
+SUPERMUESTREO = 3  # se dibuja al triple y se reduce: el detalle fino lo pide
 
 
 @dataclass(frozen=True)
@@ -39,93 +43,204 @@ class Style:
     """Los numeros que distinguen un estilo de otro."""
 
     nombre: str
-    ancho: float = 0.055  # grosor del trazo, relativo al alto de la banda
-    punta: float = 0.30  # r_final / r_inicial del lobulo; bajo = pincho
-    lobulos: int = 6
-    giro_lobulo: float = 3.2  # radianes que gira el lobulo; alto = se enrosca
-    giro_espina: float = 2.5
-    largo_lobulo: float = 0.34
-    # (escala, cuantas hojas) por capa. Mas capas = mas denso.
-    capas: tuple[tuple[float, int], ...] = ((1.0, 2), (0.6, 4))
-    desenfoque: float = 0.005
-    onda_tallo: float = 0.13
-    alcance: float = 0.30  # cuanto se alejan del tallo las capas exteriores
+    # Perfil de la pieza
+    afilado: float = 1.4  # exponente del ancho; alto = afila antes
+    panza: float = 0.55  # cuanto tarda en engordar desde la base
+    esbeltez: float = 4.5  # largo / ancho de la hoja; bajo = concha, alto = hoja
+    lobulos: int = 5  # foliolos por hoja
+    foliolo: float = 0.42  # largo del foliolo respecto al de la hoja
+    apertura: float = 0.85  # angulo con que brota el foliolo del raquis
+    rizo: float = 1.9  # cuanto se enrosca cada foliolo
+    dorso: float = 0.55  # ancho del lado interior respecto del exterior
+    giro_espina: float = 1.6
+    enroscado: float = 1.9  # >1 = casi recta y rizada solo en la punta
+
+    # Como se agrupan las piezas
+    hojas_por_ramo: int = 6
+    ramos: tuple[tuple[float, float, float, float], ...] = ()  # x, y, angulo, escala
+    pinchos: int = 0  # laminas finas sueltas que cruzan por encima
+
+    # Acabado
+    nervios: bool = True
+    canto: float = 0.010  # grosor del contorno, relativo al alto
+    desenfoque: float = 0.0035
 
 
 STYLES: dict[str, Style] = {
+    # Damasco barroco: ramos grandes que se entrelazan hasta no dejar hueco.
     "acanthus": Style(
         nombre="acanthus",
-        ancho=0.050,
-        punta=0.32,
-        lobulos=7,
-        giro_lobulo=3.4,
-        giro_espina=2.6,
-        largo_lobulo=0.36,
-        # Cinco capas hasta que no queda hueco: eso es lo que lo hace barroco.
-        # Un barroco sobrio es un barroco fallido.
-        capas=((1.05, 2), (0.70, 4), (0.48, 7), (0.32, 10), (0.20, 14)),
-        desenfoque=0.004,
-        alcance=0.46,
+        afilado=1.35,
+        panza=0.60,
+        esbeltez=5.2,
+        foliolo=0.60,
+        apertura=0.68,
+        rizo=2.2,
+        dorso=0.52,
+        giro_espina=1.7,
+        enroscado=2.1,
+        # Pocos ramos y grandes, bien repartidos. Muchos y pequenos se
+        # apelmazan en coliflores y dejan huecos entre medias: mal reparto,
+        # no falta de densidad.
+        lobulos=6,
+        hojas_por_ramo=4,
+        ramos=(
+            (0.04, 0.44, -0.30, 1.55),
+            (0.52, 0.16, 1.85, 1.35),
+            (0.52, 0.84, -1.85, 1.35),
+        ),
+        nervios=True,
     ),
+    # Laminas afiladas que se cruzan, con pinchos largos por encima.
     "tribal": Style(
         nombre="tribal",
-        ancho=0.075,
-        punta=0.02,  # afila a cero: el pincho es justo la gracia
+        afilado=2.6,  # afila a aguja
+        panza=0.45,
+        esbeltez=6.5,
         lobulos=3,
-        giro_lobulo=1.5,
-        giro_espina=2.2,
-        largo_lobulo=0.46,
-        capas=((1.15, 2), (0.55, 3)),  # pocas piezas y grandes
-        desenfoque=0.004,
-        onda_tallo=0.18,
-    ),
-    "scroll": Style(
-        nombre="scroll",
-        ancho=0.034,
-        punta=0.18,
-        lobulos=5,
-        giro_lobulo=2.8,
-        giro_espina=2.5,
-        largo_lobulo=0.32,
-        capas=((1.0, 2), (0.5, 5)),
-        desenfoque=0.006,
+        foliolo=0.72,  # foliolos largos: son cuchillas, no lobulos
+        apertura=0.55,  # muy pegados al raquis
+        rizo=1.1,
+        dorso=0.85,  # casi simetricos, como una hoja de espada
+        giro_espina=1.2,
+        enroscado=2.4,
+        hojas_por_ramo=4,
+        ramos=(
+            (0.10, 0.50, -0.30, 1.25),
+            (0.50, 0.20, 2.55, 1.05),
+            (0.50, 0.80, -2.55, 1.05),
+            (0.90, 0.50, 0.25, 1.15),
+        ),
+        pinchos=4,
+        nervios=False,
+        canto=0.006,
     ),
 }
 
 POR_DEFECTO = "acanthus"
 
 
-def _curva(base, angulo: float, largo: float, giro: float, pasos: int = 48) -> np.ndarray:
-    """Curva de curvatura constante, parametrizada por longitud de arco.
+# --------------------------------------------------------------------------
+# Geometria de una pieza
+# --------------------------------------------------------------------------
 
-    Sale de `base` en la direccion `angulo` y gira `giro` radianes en total.
+
+def _curva(
+    base, angulo: float, largo: float, giro: float, pasos: int = 64, enroscado: float = 1.0
+) -> np.ndarray:
+    """Curva parametrizada por longitud de arco que gira `giro` radianes.
+
     Integrar el angulo paso a paso evita pelearse con centros y signos, y deja
-    los puntos repartidos de forma uniforme.
+    los puntos repartidos de forma uniforme. Con `enroscado` > 1 la curvatura
+    crece hacia el final: la hoja sale casi recta y se riza en la punta, que es
+    como se riza de verdad.
     """
     t = np.linspace(0.0, 1.0, pasos)
-    ang = angulo + giro * t
+    ang = angulo + giro * t**enroscado
     paso = largo / (pasos - 1)
     puntos = np.column_stack([np.cumsum(np.cos(ang)), np.cumsum(np.sin(ang))]) * paso
     return puntos + np.asarray(base, dtype=float)
 
 
+def _normales(puntos: np.ndarray) -> np.ndarray:
+    """Normal unitaria a la izquierda de la marcha, en cada punto."""
+    tang = np.gradient(puntos, axis=0)
+    tang /= np.linalg.norm(tang, axis=1, keepdims=True) + 1e-9
+    return np.column_stack([-tang[:, 1], tang[:, 0]])
+
+
 def _direccion(puntos: np.ndarray, i: int) -> float:
-    """Angulo de la tangente de la curva en el punto i."""
     j = min(i + 1, len(puntos) - 1)
     dx, dy = puntos[j] - puntos[max(i - 1, 0)]
     return math.atan2(dy, dx)
 
 
-def _trazo(dibujo: ImageDraw.ImageDraw, puntos: np.ndarray, r0: float, r1: float) -> None:
-    """Traza la curva con grosor decreciente, como discos solapados.
+def _perfil(t: np.ndarray, estilo: Style) -> np.ndarray:
+    """Ancho a lo largo de la pieza, normalizado a 1 en su punto mas ancho.
 
-    PIL no sabe dibujar lineas que adelgazan, pero una ristra de circulos si, y
-    de paso deja los extremos redondeados.
+    Engorda cerca de la base y afila hacia la punta. El exponente es lo que
+    decide si sale hoja carnosa o aguja.
     """
-    for (x, y), r in zip(puntos, np.linspace(r0, r1, len(puntos))):
-        if r < 0.4:
-            continue
-        dibujo.ellipse([x - r, y - r, x + r, y + r], fill=TINTA)
+    ancho = (t + 0.04) ** estilo.panza * (1.0 - 0.98 * t) ** estilo.afilado
+    return ancho / ancho.max()
+
+
+def _curvatura(espina: np.ndarray) -> np.ndarray:
+    """Curvatura con signo en cada punto: positiva si la curva gira a izquierda."""
+    tang = np.gradient(espina, axis=0)
+    paso = np.linalg.norm(tang, axis=1) + 1e-9
+    angulo = np.unwrap(np.arctan2(tang[:, 1], tang[:, 0]))
+    return np.gradient(angulo) / paso
+
+
+def limitar_por_curvatura(
+    espina: np.ndarray, izquierda: np.ndarray, derecha: np.ndarray, margen: float = 0.75
+) -> tuple[np.ndarray, np.ndarray]:
+    """Recorta los anchos para que el contorno desplazado no se pliegue.
+
+    Si un borde se separa de la espina mas que el radio de curvatura, la curva
+    paralela se dobla sobre si misma y el relleno sale con picos: es el problema
+    clasico de las curvas offset, y se veia como triangulos en el arranque de
+    cada pieza. Solo hay que frenar el lado hacia el que gira la curva; el de
+    fuera puede ensancharse cuanto quiera.
+    """
+    curvatura = _curvatura(espina)
+    tope = margen / (np.abs(curvatura) + 1e-9)
+    return (
+        np.where(curvatura > 0, np.minimum(izquierda, tope), izquierda),
+        np.where(curvatura < 0, np.minimum(derecha, tope), derecha),
+    )
+
+
+def _pieza(
+    dibujo: ImageDraw.ImageDraw,
+    espina: np.ndarray,
+    izquierda: np.ndarray,
+    derecha: np.ndarray,
+    canto: int,
+) -> np.ndarray:
+    """Rellena el poligono que encierran los dos bordes y devuelve el exterior."""
+    izquierda, derecha = limitar_por_curvatura(espina, izquierda, derecha)
+    normal = _normales(espina)
+    borde_i = espina + normal * izquierda[:, None]
+    borde_d = espina - normal * derecha[:, None]
+    contorno = np.vstack([borde_i, borde_d[::-1]])
+    dibujo.polygon(
+        [(float(x), float(y)) for x, y in contorno],
+        fill=TINTA,
+        outline=CANTO,
+        width=canto,
+    )
+    return borde_i
+
+
+def _foliolo(
+    dibujo: ImageDraw.ImageDraw,
+    base,
+    angulo: float,
+    largo: float,
+    ancho: float,
+    giro: float,
+    estilo: Style,
+    canto: int,
+    nervio: bool,
+) -> None:
+    """Un lobulo suelto: pieza ancha en el arranque que acaba en punta rizada."""
+    pasos = 56
+    espina = _curva(base, angulo, largo, giro=giro, pasos=pasos, enroscado=estilo.enroscado)
+    t = np.linspace(0.0, 1.0, pasos)
+    # Nace en cero, engorda a un tercio y afila en punta larga: eso es un
+    # foliolo. Si el ancho no arranca de cero, la base queda con una tapa recta
+    # que delata el poligono.
+    w = t**estilo.panza * (1.0 - 0.99 * t) ** estilo.afilado
+    w = ancho * w / w.max()
+    _pieza(dibujo, espina, w, w * estilo.dorso, canto)
+    if nervio:
+        dibujo.line(
+            [(float(x), float(y)) for x, y in espina[: int(pasos * 0.85)]],
+            fill=CANTO,
+            width=max(1, int(canto * 0.7)),
+        )
 
 
 def _hoja(
@@ -135,26 +250,130 @@ def _hoja(
     largo: float,
     ancho: float,
     estilo: Style,
+    lado: int,
+    canto: int,
+) -> np.ndarray:
+    """Hoja de acanto: un raquis del que brotan foliolos alternos que menguan.
+
+    Modelar los lobulos como piezas propias, y no como ondas del contorno, es
+    lo que separa una hoja de una sierra: cada uno tiene su angulo, su rizo y
+    su nervio, y unos tapan a otros.
+    """
+    pasos = 80
+    raquis = _curva(
+        base,
+        angulo,
+        largo,
+        giro=lado * estilo.giro_espina,
+        pasos=pasos,
+        enroscado=estilo.enroscado,
+    )
+    t = np.linspace(0.0, 1.0, pasos)
+
+    # El raquis va fino: es el soporte, no la hoja.
+    nervadura = ancho * 0.30 * (1.0 - 0.95 * t) ** 0.9
+    _pieza(dibujo, raquis, nervadura, nervadura, canto)
+
+    # De la base a la punta, y alternando: asi los de delante tapan a los de
+    # atras y la hoja gana profundidad. Solapados, no en fila: una hoja de
+    # acanto es una mata apretada, no una rama con hojas separadas.
+    for k, fraccion in enumerate(np.linspace(0.02, 0.80, estilo.lobulos)):
+        i = int(fraccion * (pasos - 1))
+        signo = lado if k % 2 == 0 else -lado
+        merma = (1.0 - 0.75 * fraccion) ** 0.9
+        _foliolo(
+            dibujo,
+            raquis[i],
+            _direccion(raquis, i) + signo * estilo.apertura,
+            largo * estilo.foliolo * merma,
+            ancho * 0.78 * merma,
+            giro=signo * estilo.rizo,
+            estilo=estilo,
+            canto=canto,
+            nervio=estilo.nervios,
+        )
+
+    # Remate: el foliolo de la punta sigue la direccion del raquis.
+    _foliolo(
+        dibujo,
+        raquis[-1],
+        _direccion(raquis, pasos - 1),
+        largo * estilo.foliolo * 0.5,
+        ancho * 0.5,
+        giro=lado * estilo.rizo * 1.3,
+        estilo=estilo,
+        canto=canto,
+        nervio=estilo.nervios,
+    )
+    return raquis
+
+
+def _ramo(
+    dibujo: ImageDraw.ImageDraw,
+    base,
+    angulo: float,
+    largo: float,
+    ancho: float,
+    estilo: Style,
+    canto: int,
     lado: int = 1,
 ) -> None:
-    """Espina enrollada con lobulos alternos que menguan hacia la punta."""
-    espina = _curva(base, angulo, largo, giro=lado * estilo.giro_espina, pasos=64)
-    _trazo(dibujo, espina, r0=ancho, r1=ancho * max(estilo.punta, 0.08))
+    """Tallo con hojas alternas que menguan, y un rizo terminal."""
+    pasos = 60
+    tallo = _curva(base, angulo, largo, giro=lado * 1.5, pasos=pasos)
+    t = np.linspace(0.0, 1.0, pasos)
+    grosor_tallo = ancho * 0.30 * (1.0 - 0.85 * t)
+    _pieza(dibujo, tallo, grosor_tallo, grosor_tallo, canto)
 
-    for k, fraccion in enumerate(np.linspace(0.06, 0.78, estilo.lobulos)):
-        i = int(fraccion * (len(espina) - 1))
-        hacia = _direccion(espina, i)
-        # Alternos: uno al exterior de la curva y el siguiente al interior.
+    for k, fraccion in enumerate(np.linspace(0.04, 0.90, estilo.hojas_por_ramo)):
+        i = int(fraccion * (pasos - 1))
         signo = lado if k % 2 == 0 else -lado
-        merma = 1.0 - fraccion
-        lobulo = _curva(
-            espina[i],
-            hacia + signo * 0.88,
-            largo * estilo.largo_lobulo * merma,
-            giro=signo * estilo.giro_lobulo,
-            pasos=26,
+        largo_hoja = largo * 0.44 * (1.0 - 0.5 * fraccion)
+        _hoja(
+            dibujo,
+            tallo[i],
+            _direccion(tallo, i) + signo * 0.95,
+            largo_hoja,
+            largo_hoja / estilo.esbeltez,
+            estilo,
+            lado=signo,
+            canto=canto,
         )
-        _trazo(dibujo, lobulo, r0=ancho * 0.75 * merma, r1=ancho * estilo.punta * merma)
+
+    # Rizo del final, que es lo que remata el ramo en vez de dejarlo cortado.
+    largo_rizo = largo * 0.38
+    _hoja(
+        dibujo,
+        tallo[-1],
+        _direccion(tallo, pasos - 1),
+        largo_rizo,
+        largo_rizo / estilo.esbeltez,
+        estilo,
+        lado=lado,
+        canto=canto,
+    )
+
+
+def _pincho(
+    dibujo: ImageDraw.ImageDraw,
+    base,
+    angulo: float,
+    largo: float,
+    ancho: float,
+    giro: float,
+    canto: int,
+) -> None:
+    """Lamina larga y fina que cruza por encima de todo lo demas."""
+    pasos = 48
+    espina = _curva(base, angulo, largo, giro=giro, pasos=pasos)
+    t = np.linspace(0.0, 1.0, pasos)
+    w = ancho * (1.0 - 0.995 * t) ** 2.6
+    _pieza(dibujo, espina, w, w, canto)
+
+
+# --------------------------------------------------------------------------
+# Campos y bandas
+# --------------------------------------------------------------------------
 
 
 def ornament_field(size: tuple[int, int], estilo: Style | str = POR_DEFECTO) -> Image.Image:
@@ -171,63 +390,48 @@ def ornament_field(size: tuple[int, int], estilo: Style | str = POR_DEFECTO) -> 
     lienzo = Image.new("L", (media * SUPERMUESTREO, alto_px * SUPERMUESTREO), FONDO)
     dibujo = ImageDraw.Draw(lienzo)
     w, h = lienzo.size
-    grosor = h * estilo.ancho
+    canto = max(1, int(h * estilo.canto))
 
-    # Tallo ondulado que recorre la banda y del que cuelga todo lo demas.
-    fase = np.linspace(0, 2 * math.pi, 160)
-    tallo = np.column_stack(
-        [np.linspace(0, w, 160), h * 0.5 + h * estilo.onda_tallo * np.sin(fase)]
-    )
-    _trazo(dibujo, tallo, r0=grosor * 0.45, r1=grosor * 0.45)
-
-    for capa, (escala, cuantas) in enumerate(estilo.capas):
-        # Cada capa se desplaza media casilla respecto de la anterior, para que
-        # caiga en los huecos que dejo la de arriba en vez de encima.
-        desfase = 0.5 / cuantas if capa % 2 else 0.0
-        for i in range(cuantas):
-            fraccion = (i + 0.5) / cuantas + desfase
-            j = int(min(fraccion, 0.999) * (len(tallo) - 1))
-            lado = 1 if (i + capa) % 2 == 0 else -1
-            # Las capas finas se separan del tallo para llenar arriba y abajo.
-            alejamiento = h * estilo.alcance * capa / max(len(estilo.capas) - 1, 1)
-            base = (tallo[j][0], tallo[j][1] + lado * alejamiento)
-            _hoja(
-                dibujo,
-                base,
-                -lado * math.pi / 2 + lado * 0.5,
-                h * 0.62 * escala,
-                grosor * escala,
-                estilo,
-                lado=lado,
-            )
-
-    # Dos hojas mayores flanqueando el medallon, que es donde pide mas peso.
-    for lado in (1, -1):
-        _hoja(
+    for i, (x, y, angulo, escala) in enumerate(estilo.ramos):
+        _ramo(
             dibujo,
-            (w * 0.02, h * 0.5),
-            lado * 0.55,
-            h * 1.05,
-            grosor,
+            (w * x, h * y),
+            angulo,
+            h * 0.92 * escala,  # tallo largo: las hojas se reparten por el
+            h * 0.105 * escala,
             estilo,
-            lado=lado,
+            canto=canto,
+            lado=1 if i % 2 == 0 else -1,
+        )
+
+    # Los pinchos van los ultimos: tienen que quedar por encima.
+    for k in range(estilo.pinchos):
+        fraccion = (k + 0.5) / estilo.pinchos
+        arriba = k % 2 == 0
+        _pincho(
+            dibujo,
+            (w * fraccion, h * (0.28 if arriba else 0.72)),
+            (-0.6 if arriba else 0.6) + (0.35 if k % 2 else -0.35),
+            h * 0.46,
+            h * 0.038,
+            giro=(1.0 if arriba else -1.0) * 1.1,
+            canto=canto,
         )
 
     lienzo = lienzo.resize((media, alto_px), Image.LANCZOS)
     completo = Image.new("L", size, FONDO)
     completo.paste(lienzo, (media, 0))
     completo.paste(lienzo.transpose(Image.FLIP_LEFT_RIGHT), (0, 0))
-    # El desenfoque convierte la silueta plana en relieve redondeado. Poco: lo
-    # justo para matar el canto sin comerse el dibujo.
+    # Desenfoque corto: redondea el canto sin comerse las nervaduras.
     return completo.filter(
-        ImageFilter.GaussianBlur(max(1.0, alto_px * estilo.desenfoque))
+        ImageFilter.GaussianBlur(max(0.6, alto_px * estilo.desenfoque))
     )
 
 
 def ink_fraction(campo: Image.Image) -> float:
     """Proporcion de superficie con ornamento. Util para calibrar densidades."""
     valores = np.asarray(campo, dtype=int)
-    return float((valores < (FONDO + TINTA) / 2).mean())
+    return float((valores < (FONDO + CANTO) / 2).mean())
 
 
 def _prewarp_columns(imagen: Image.Image, escalas: np.ndarray) -> np.ndarray:
@@ -281,7 +485,6 @@ def sphere_band(
     izquierda = (ancho - diametro) // 2
     banda.paste(estirada, (izquierda, fila0), mascara)
 
-    # Aro del medallon, para separarlo del ornamento.
     ImageDraw.Draw(banda).ellipse(
         [izquierda, fila0, izquierda + diametro - 1, fila0 + diametro - 1],
         outline=TINTA,

@@ -8,8 +8,11 @@ from theforge.ornament import (
     FONDO,
     STYLES,
     TINTA,
+    _curva,
+    _curvatura,
     contact_sheet,
     ink_fraction,
+    limitar_por_curvatura,
     ornament_field,
     sphere_band,
 )
@@ -58,7 +61,39 @@ def test_el_acanto_es_mas_denso_que_el_resto():
     """El horror vacui es el estilo, no un exceso del estilo."""
     densidad = {n: ink_fraction(ornament_field(TAMANO, n)) for n in STYLES}
     assert densidad["acanthus"] == max(densidad.values())
-    assert densidad["acanthus"] > densidad["scroll"] * 1.5
+    assert densidad["acanthus"] > densidad["tribal"] * 1.5
+
+
+def test_la_curvatura_de_un_circulo_es_uno_partido_por_el_radio():
+    """El limite de ancho por curvatura depende de que esto este bien."""
+    radio = 40.0
+    angulo = np.linspace(0, 1.6 * np.pi, 300)
+    circulo = np.column_stack([radio * np.cos(angulo), radio * np.sin(angulo)])
+    # Se descartan los extremos, donde np.gradient usa diferencias laterales.
+    interior = _curvatura(circulo)[5:-5]
+    assert interior == pytest.approx(1.0 / radio, rel=0.02)
+
+
+def test_el_lado_concavo_nunca_pasa_del_radio_de_curvatura():
+    """La invariante que evita que el contorno se pliegue sobre si mismo."""
+    espina = _curva((200, 200), 0.0, 300.0, giro=5.0, pasos=120)
+    ancho = np.full(120, 90.0)  # mucho mayor que el radio de curvatura
+    izquierda, derecha = limitar_por_curvatura(espina, ancho, ancho)
+
+    radio = 1.0 / np.abs(_curvatura(espina))
+    gira_a_izquierda = _curvatura(espina) > 0
+    assert np.all(izquierda[gira_a_izquierda] < radio[gira_a_izquierda])
+    assert np.all(derecha[~gira_a_izquierda] < radio[~gira_a_izquierda])
+    # Y el lado convexo se queda como estaba: ahi ensanchar no rompe nada.
+    assert np.all(derecha[gira_a_izquierda] == 90.0)
+
+
+def test_una_recta_no_recorta_nada():
+    recta = _curva((0, 0), 0.0, 100.0, giro=0.0, pasos=50)
+    ancho = np.full(50, 30.0)
+    izquierda, derecha = limitar_por_curvatura(recta, ancho, ancho)
+    assert izquierda == pytest.approx(30.0)
+    assert derecha == pytest.approx(30.0)
 
 
 def test_la_hoja_de_pruebas_lleva_todos_los_estilos():
