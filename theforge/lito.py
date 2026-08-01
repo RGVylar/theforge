@@ -18,10 +18,17 @@ se imprimen las litofanias):
 En los tres casos la pieza queda apoyada en Z = 0 y la imagen se ve sin espejar
 mirando la pieza desde fuera.
 
-En las superficies cerradas en u (cilindro de 360 grados y esfera) la imagen se
-puede repetir varias veces alrededor con `repeat`, que ademas es la forma de
-que no salga estirada: lo que manda es la proporcion del trozo de superficie
-que le toca a cada copia.
+Sobre la deformacion en la esfera: al envolver una imagen plana sobre una
+esfera la escala horizontal se encoge con el coseno de la latitud. Con `fit`
+se elige que hacer con eso:
+
+    stretch    las latitudes se reparten uniformemente. Es lo directo, pero la
+               imagen sale comprimida por cos(latitud): fiel solo en el ecuador.
+    conformal  las latitudes se espacian segun 1/cos(latitud) (Mercator
+               inverso), de modo que la compresion vertical acompana a la
+               horizontal y las formas quedan correctas en toda la superficie.
+               A cambio la banda deja de elegirse: sale de lat_min, repeat y la
+               proporcion de la imagen.
 """
 
 from __future__ import annotations
@@ -39,6 +46,10 @@ FLAT = "flat"
 CYLINDRICAL = "cylindrical"
 SPHERE = "sphere"
 CURVES = (FLAT, CYLINDRICAL, SPHERE)
+
+STRETCH = "stretch"
+CONFORMAL = "conformal"
+FITS = (STRETCH, CONFORMAL)
 
 
 @dataclass
@@ -58,7 +69,8 @@ class LitoParams:
     # Solo para curve=sphere:
     diameter_mm: float = 100.0
     lat_min_deg: float = -45.0  # corte inferior; -45 es el limite sin soportes
-    lat_max_deg: float = 75.0  # corte superior; por encima de ~80 no cierra bien
+    lat_max_deg: float = 75.0  # corte superior; ignorado si fit=conformal
+    fit: str = STRETCH
 
     def validate(self) -> None:
         if self.width_mm <= 0:
@@ -67,13 +79,18 @@ class LitoParams:
             raise ValueError("se requiere 0 < min_thickness < max_thickness")
         if self.curve not in CURVES:
             raise ValueError(f"curve desconocida: {self.curve!r}")
+        if self.fit not in FITS:
+            raise ValueError(f"fit desconocido: {self.fit!r}")
         if self.curve == CYLINDRICAL and not 0 < self.arc_degrees <= 360:
             raise ValueError("arc_degrees debe estar en (0, 360]")
         if self.curve == SPHERE:
             if self.diameter_mm <= 0:
                 raise ValueError("diameter_mm debe ser > 0")
-            if not -90 < self.lat_min_deg < self.lat_max_deg < 90:
-                raise ValueError("se requiere -90 < lat_min_deg < lat_max_deg < 90")
+            if not -90 < self.lat_min_deg < 90:
+                raise ValueError("lat_min_deg debe estar en (-90, 90)")
+            # Con fit=conformal el corte superior lo fija la imagen, no tu.
+            if self.fit == STRETCH and not self.lat_min_deg < self.lat_max_deg < 90:
+                raise ValueError("se requiere lat_min_deg < lat_max_deg < 90")
         if self.samples < 2:
             raise ValueError("samples debe ser >= 2")
         if self.repeat < 1:
@@ -82,14 +99,7 @@ class LitoParams:
             raise ValueError("gamma debe ser > 0")
         if self.frame_mm < 0:
             raise ValueError("frame_mm no puede ser negativo")
-        # El marco se mide sobre la superficie, asi que tiene que caber en ella.
-        # En la esfera las dos medidas salen de la geometria; en las demas solo
-        # se puede comprobar el ancho, que el alto depende de la imagen.
-        if self.curve == SPHERE:
-            ancho, alto = self._sphere_size()
-            if 2 * self.frame_mm >= min(ancho, alto):
-                raise ValueError("frame_mm no cabe en la superficie de la esfera")
-        elif 2 * self.frame_mm >= self.width_mm:
+        if self.curve != SPHERE and 2 * self.frame_mm >= self.width_mm:
             raise ValueError("frame_mm no cabe en el ancho")
 
     @property
@@ -108,28 +118,94 @@ class LitoParams:
             return self.width_mm / math.radians(self.arc_degrees)
         raise ValueError("la pieza plana no tiene radio")
 
-    def _sphere_size(self) -> tuple[float, float]:
-        """Ancho (ecuador) y alto (meridiano) de la esfera, medidos en la superficie."""
-        radio = self.diameter_mm / 2.0
-        span = math.radians(self.lat_max_deg - self.lat_min_deg)
-        return 2 * math.pi * radio, radio * span
 
-    def surface_size(self, image: Image.Image | None = None) -> tuple[float, float]:
-        """Ancho y alto de la superficie desplegada, en mm.
+# --------------------------------------------------------------------------
+# Reparto de la imagen sobre la superficie
+# --------------------------------------------------------------------------
 
-        En la esfera lo fija la geometria; en las demas, el ancho lo pones tu y
-        el alto sale de la proporcion de la imagen.
-        """
-        if self.curve == SPHERE:
-            return self._sphere_size()
-        if image is None:
-            raise ValueError("hace falta la imagen para saber el alto")
-        return self.width_mm, self.width_mm * image.height / image.width
 
-    def stretch(self, image: Image.Image) -> float:
-        """Cuanto se ensancha la imagen al mapearla. 1.0 = sin deformar."""
-        ancho, alto = self.surface_size(image)
-        return (ancho / self.repeat / alto) / (image.width / image.height)
+def _mercator(lat: float) -> float:
+    """Latitud (rad) -> coordenada vertical de Mercator."""
+    return math.log(math.tan(math.pi / 4.0 + lat / 2.0))
+
+
+def _inverse_mercator(y):
+    """Coordenada de Mercator -> latitud (rad). Vale para escalares y arrays."""
+    return 2.0 * np.arctan(np.exp(y)) - math.pi / 2.0
+
+
+@dataclass
+class Layout:
+    """Como queda repartida la imagen sobre la superficie, ya resuelto.
+
+    width_mm y height_mm son longitudes de arco medidas sobre la superficie, de
+    modo que el marco mide lo mismo en las tres formas. lat solo lo usa la
+    esfera: es la latitud (rad) de cada fila de la rejilla.
+    """
+
+    rows: int
+    cols: int
+    width_mm: float
+    height_mm: float
+    lat: np.ndarray | None = None
+
+    @property
+    def lat_degrees(self) -> tuple[float, float]:
+        if self.lat is None:
+            raise ValueError("solo la esfera tiene latitudes")
+        return math.degrees(self.lat[0]), math.degrees(self.lat[-1])
+
+
+def layout(image: Image.Image, params: LitoParams) -> Layout:
+    """Resuelve la rejilla y el trozo de superficie que ocupa la imagen."""
+    params.validate()
+    aspecto = image.height / image.width
+
+    # nu multiplo de repeat, para que las copias sean identicas al teselar.
+    cols = max(params.repeat, round(params.samples / params.repeat) * params.repeat)
+    # Se muestrea la imagen con su propia proporcion: cada copia es cuadrada si
+    # la imagen lo es, independientemente de lo que mida en la superficie.
+    rows = max(2, round(cols / params.repeat * aspecto))
+
+    if params.curve != SPHERE:
+        ancho = params.width_mm
+        return Layout(rows, cols, ancho, ancho * aspecto)
+
+    radio = params.radius_mm
+    lat_min = math.radians(params.lat_min_deg)
+    fraccion = np.linspace(0.0, 1.0, rows)
+    if params.fit == CONFORMAL:
+        # Que la banda de Mercator guarde la proporcion de la imagen es lo que
+        # hace que las formas no se deformen.
+        span = (2 * math.pi / params.repeat) * aspecto
+        lat = _inverse_mercator(_mercator(lat_min) + fraccion * span)
+    else:
+        lat_max = math.radians(params.lat_max_deg)
+        lat = lat_min + fraccion * (lat_max - lat_min)
+
+    return Layout(
+        rows=rows,
+        cols=cols,
+        width_mm=2 * math.pi * radio,
+        height_mm=radio * float(lat[-1] - lat[0]),
+        lat=lat,
+    )
+
+
+def horizontal_scale(lay: Layout, params: LitoParams) -> tuple[float, float]:
+    """Ancho real de la imagen sobre la superficie, minimo y maximo.
+
+    1.0 es fiel. En la esfera con fit=stretch la escala horizontal vale
+    cos(latitud), asi que solo el ecuador queda fiel.
+    """
+    base = lay.width_mm / params.repeat / lay.height_mm
+    if params.curve != SPHERE:
+        return base, base
+    if params.fit == CONFORMAL:
+        return 1.0, 1.0
+    # El factor cos(lat) va referido al ecuador, donde la banda mide width/repeat.
+    cos_lat = np.cos(lay.lat)
+    return float(base * cos_lat.min()), float(base * cos_lat.max())
 
 
 def load_grayscale(path: str | Path) -> Image.Image:
@@ -146,41 +222,39 @@ def load_grayscale(path: str | Path) -> Image.Image:
     return img.convert("L")
 
 
-def _grid_coords(
-    nu: int, nv: int, size: tuple[float, float], wraps_u: bool
-) -> tuple[np.ndarray, np.ndarray]:
-    """Coordenadas del parametro (u a lo ancho, v a lo alto) como rejillas (nv, nu).
+def _grid_coords(lay: Layout, params: LitoParams) -> tuple[np.ndarray, np.ndarray]:
+    """Coordenadas del parametro (u a lo ancho, v a lo alto) como rejillas.
 
-    Son longitudes de arco medidas sobre la superficie, en mm, tambien en las
-    piezas curvas: asi el marco mide lo mismo en todas.
+    Son longitudes de arco sobre la superficie, en mm, tambien en las piezas
+    curvas: asi el marco mide lo mismo en todas.
     """
-    ancho, alto = size
-    if wraps_u:
+    if params.wraps_u:
         # La ultima columna coincidiria con la primera, asi que se excluye.
-        u = np.linspace(0.0, ancho, nu, endpoint=False)
+        u = np.linspace(0.0, lay.width_mm, lay.cols, endpoint=False)
     else:
-        u = np.linspace(0.0, ancho, nu)
-    v = np.linspace(0.0, alto, nv)
+        u = np.linspace(0.0, lay.width_mm, lay.cols)
+    if lay.lat is None:
+        v = np.linspace(0.0, lay.height_mm, lay.rows)
+    else:
+        # Con fit=conformal las filas no van equiespaciadas en latitud.
+        v = params.radius_mm * (lay.lat - lay.lat[0])
     return np.meshgrid(u, v)
 
 
-def _grid_shape(image: Image.Image, params: LitoParams) -> tuple[int, int]:
-    """Numero de muestras (nv, nu), con nu multiplo de repeat."""
-    ancho, alto = params.surface_size(image)
-    nu = max(params.repeat, round(params.samples / params.repeat) * params.repeat)
-    nv = max(2, round(nu * alto / ancho))
-    return nv, nu
-
-
-def thickness_map(image: Image.Image, params: LitoParams) -> np.ndarray:
+def thickness_map(
+    image: Image.Image, params: LitoParams, lay: Layout | None = None
+) -> np.ndarray:
     """Mapa de grosores (nv, nu) en mm. La fila 0 es la base de la pieza."""
     params.validate()
     if image.mode != "L":
         image = image.convert("L")
+    if lay is None:
+        lay = layout(image, params)
+    if params.frame_mm > 0 and 2 * params.frame_mm >= min(lay.width_mm, lay.height_mm):
+        raise ValueError("frame_mm no cabe en la superficie")
 
-    nv, nu = _grid_shape(image, params)
     # LANCZOS promedia al reducir, asi que hace de antialias del mapa de alturas.
-    copia = image.resize((nu // params.repeat, nv), Image.LANCZOS)
+    copia = image.resize((lay.cols // params.repeat, lay.rows), Image.LANCZOS)
     # PIL da la fila 0 arriba; la pieza crece hacia +Z, asi que se le da la vuelta.
     gris = np.asarray(copia, dtype=float)[::-1] / 255.0
     if params.repeat > 1:
@@ -194,42 +268,39 @@ def thickness_map(image: Image.Image, params: LitoParams) -> np.ndarray:
     espesor = params.max_thickness - gris * (params.max_thickness - params.min_thickness)
 
     if params.frame_mm > 0:
-        ancho, alto = params.surface_size(image)
-        u, v = _grid_coords(nu, nv, (ancho, alto), params.wraps_u)
-        borde = (v < params.frame_mm) | (v > alto - params.frame_mm)
+        u, v = _grid_coords(lay, params)
+        borde = (v < params.frame_mm) | (v > lay.height_mm - params.frame_mm)
         if not params.wraps_u:
             # Una superficie cerrada en u no tiene bordes verticales que enmarcar.
-            borde |= (u < params.frame_mm) | (u > ancho - params.frame_mm)
+            borde |= (u < params.frame_mm) | (u > lay.width_mm - params.frame_mm)
         espesor[borde] = params.max_thickness
 
     return espesor
 
 
 def surfaces(
-    espesor: np.ndarray, params: LitoParams, size: tuple[float, float]
+    espesor: np.ndarray, params: LitoParams, lay: Layout
 ) -> tuple[np.ndarray, np.ndarray]:
     """Rejillas de vertices de la cara frontal (con relieve) y la trasera (lisa).
 
     La frontal es la que mira hacia fuera; su normal es du x dv.
     """
-    nv, nu = espesor.shape
-    ancho, alto = size
-    u, v = _grid_coords(nu, nv, size, params.wraps_u)
+    u, v = _grid_coords(lay, params)
 
     if params.curve == FLAT:
-        x = u - ancho / 2.0
+        x = u - lay.width_mm / 2.0
         front = np.stack([x, -espesor, v], axis=-1)
         back = np.stack([x, np.zeros_like(u), v], axis=-1)
     elif params.curve == CYLINDRICAL:
         radio = params.radius_mm
         # Arco centrado en theta = 0, que es la direccion -Y.
-        theta = (u - ancho / 2.0) / radio
+        theta = (u - lay.width_mm / 2.0) / radio
         front = _revolve(radio + espesor, theta, v)
         back = _revolve(radio, theta, v)
     else:
         radio = params.radius_mm
         theta = u / radio
-        lat = math.radians(params.lat_min_deg) + v / radio
+        lat = np.broadcast_to(lay.lat[:, None], u.shape)
         front = _sphere_points(radio + espesor, theta, lat)
         back = _sphere_points(radio, theta, lat)
 
@@ -265,6 +336,7 @@ def lithophane(image: str | Path | Image.Image, params: LitoParams) -> np.ndarra
     """Genera la malla (n, 3, 3) de la litofania, cerrada y orientada hacia fuera."""
     params.validate()
     img = image if isinstance(image, Image.Image) else load_grayscale(image)
-    espesor = thickness_map(img, params)
-    front, back = surfaces(espesor, params, params.surface_size(img))
+    lay = layout(img, params)
+    espesor = thickness_map(img, params, lay)
+    front, back = surfaces(espesor, params, lay)
     return closed_shell(front, back, wrap_u=params.wraps_u)

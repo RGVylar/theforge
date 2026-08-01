@@ -10,10 +10,15 @@ from pathlib import Path
 
 from theforge import __version__
 from theforge.lito import (
+    CONFORMAL,
     CURVES,
     CYLINDRICAL,
+    FITS,
     SPHERE,
+    Layout,
     LitoParams,
+    horizontal_scale,
+    layout,
     lithophane,
     load_grayscale,
 )
@@ -61,7 +66,14 @@ def _add_lito_parser(sub: argparse._SubParsersAction) -> None:
         "--lat-max",
         type=float,
         default=75.0,
-        help="latitud del corte superior de la esfera (75)",
+        help="latitud del corte superior de la esfera; ignorado con --fit conformal (75)",
+    )
+    p.add_argument(
+        "--fit",
+        choices=FITS,
+        default=FITS[0],
+        help="reparto de la imagen sobre la esfera: stretch reparte las latitudes "
+        "por igual, conformal las espacia para que las formas no se deformen (stretch)",
     )
     p.add_argument(
         "--repeat", type=int, default=1, help="copias de la imagen alrededor de la pieza (1)"
@@ -82,7 +94,7 @@ def _add_lito_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=cmd_lito)
 
 
-def _describe_shape(params: LitoParams) -> None:
+def _describe_shape(params: LitoParams, lay: Layout) -> None:
     """Resumen de la forma, con los numeros que hacen falta para imprimirla."""
     if params.curve == CYLINDRICAL:
         cerrado = " (cerrado, sin costura)" if params.wraps_u else ""
@@ -90,31 +102,58 @@ def _describe_shape(params: LitoParams) -> None:
             f"forma     cilindrica, arco {params.arc_degrees:g} grados, "
             f"radio interior {params.radius_mm:.1f} mm{cerrado}"
         )
-    elif params.curve == SPHERE:
-        radio = params.radius_mm
-        boca = 2 * radio * math.cos(math.radians(params.lat_min_deg))
-        respiradero = 2 * radio * math.cos(math.radians(params.lat_max_deg))
-        print(
-            f"forma     esfera de {params.diameter_mm:g} mm, "
-            f"latitudes {params.lat_min_deg:g} a {params.lat_max_deg:g} grados"
-        )
-        print(
-            f"bocas     abajo {boca:.1f} mm de diametro, arriba {respiradero:.1f} mm"
-        )
-        # En una esfera la pendiente de la pared es dr/dz = -tan(latitud), asi
-        # que el voladizo respecto a la vertical coincide con la latitud.
-        voladizo = abs(params.lat_min_deg)
-        aviso = "" if voladizo <= 45 else "  <-- por encima de 45, necesita soportes"
-        print(f"voladizo  {voladizo:g} grados en el arranque{aviso}")
-        if params.frame_mm <= 0:
-            # El borde exterior esta a radio R+grosor, y el grosor lo pone la
-            # imagen: sin marco el corte queda ondulado y la pieza no asienta.
-            print(
-                "AVISO: sin --frame el borde de apoyo queda ondulado y la esfera "
-                "bailara sobre unos pocos puntos"
-            )
-    else:
+        return
+    if params.curve != SPHERE:
         print("forma     plana")
+        return
+
+    radio = params.radius_mm
+    lat_min, lat_max = lay.lat_degrees
+    derivada = " (derivada de la imagen)" if params.fit == CONFORMAL else ""
+    print(
+        f"forma     esfera de {params.diameter_mm:g} mm, latitudes "
+        f"{lat_min:.1f} a {lat_max:.1f} grados{derivada}"
+    )
+    boca = 2 * radio * math.cos(math.radians(lat_min))
+    respiradero = 2 * radio * math.cos(math.radians(lat_max))
+    print(f"bocas     abajo {boca:.1f} mm de diametro, arriba {respiradero:.1f} mm")
+
+    # En una esfera la pendiente de la pared es dr/dz = -tan(latitud), asi que
+    # el voladizo respecto a la vertical coincide con la latitud.
+    voladizo = abs(lat_min)
+    aviso = "" if voladizo <= 45 else "  <-- por encima de 45, necesita soportes"
+    print(f"voladizo  {voladizo:.1f} grados en el arranque{aviso}")
+    if lat_max > 80:
+        print(
+            f"AVISO: el corte superior queda a {lat_max:.1f} grados; por encima de 80 "
+            "la pared es casi horizontal y tendria que puentear al aire"
+        )
+    if params.frame_mm <= 0:
+        # El borde exterior esta a radio R+grosor, y el grosor lo pone la
+        # imagen: sin marco el corte queda ondulado y la pieza no asienta.
+        print(
+            "AVISO: sin --frame el borde de apoyo queda ondulado y la esfera "
+            "bailara sobre unos pocos puntos"
+        )
+
+
+def _describe_fit(params: LitoParams, lay: Layout) -> None:
+    """Cuanto se deforma la imagen al mapearla sobre la superficie."""
+    minimo, maximo = horizontal_scale(lay, params)
+    if params.curve == SPHERE and params.fit == CONFORMAL:
+        print("reparto   conforme: las formas no se deforman en ninguna latitud")
+        return
+    if abs(maximo - minimo) > 0.01:
+        # Solo pasa en la esfera con fit=stretch, donde la escala va con cos(lat).
+        print(
+            f"reparto   la imagen queda entre el {minimo * 100:.0f}% y el "
+            f"{maximo * 100:.0f}% de su ancho segun la latitud; "
+            "con --fit conformal no se deforma"
+        )
+        return
+    if not 0.87 < minimo < 1.15:
+        consejo = "ajusta --repeat" if params.wraps_u else "recorta la imagen"
+        print(f"AVISO: la imagen se deforma x{minimo:.2f} en horizontal; {consejo}")
 
 
 def cmd_lito(args: argparse.Namespace) -> int:
@@ -132,12 +171,13 @@ def cmd_lito(args: argparse.Namespace) -> int:
         diameter_mm=args.diameter,
         lat_min_deg=args.lat_min,
         lat_max_deg=args.lat_max,
+        fit=args.fit,
     )
     params.validate()
 
     salida = args.output or args.image.with_suffix(".stl")
     imagen = load_grayscale(args.image)
-    ancho, alto = params.surface_size(imagen)
+    lay = layout(imagen, params)
 
     inicio = time.perf_counter()
     malla = lithophane(imagen, params)
@@ -145,19 +185,13 @@ def cmd_lito(args: argparse.Namespace) -> int:
     tardanza = time.perf_counter() - inicio
 
     print(f"imagen    {args.image} ({imagen.width}x{imagen.height} px)")
-    _describe_shape(params)
+    _describe_shape(params, lay)
     reparto = f" x{params.repeat}" if params.repeat > 1 else ""
     print(
-        f"pieza     {ancho:.1f} x {alto:.1f} mm de superficie{reparto}, "
+        f"pieza     {lay.width_mm:.1f} x {lay.height_mm:.1f} mm de superficie{reparto}, "
         f"grosor {params.min_thickness:g}-{params.max_thickness:g} mm"
     )
-    estirado = params.stretch(imagen)
-    if not 0.87 < estirado < 1.15:
-        consejo = "" if params.wraps_u else " o recorta la imagen"
-        print(
-            f"AVISO: la imagen se deforma x{estirado:.2f} en horizontal; "
-            f"ajusta --repeat{consejo}"
-        )
+    _describe_fit(params, lay)
     print(f"malla     {len(malla)} triangulos en {tardanza:.1f} s")
 
     if not args.no_check:

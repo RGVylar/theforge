@@ -68,7 +68,8 @@ python -m pytest
 | `--arc` | 180 | grados de arco si es cilíndrica; **360 cierra el cilindro sin costura** |
 | `--diameter` | 100 | diámetro de la esfera en mm |
 | `--lat-min` | −45 | latitud del corte inferior de la esfera (la boca del cableado) |
-| `--lat-max` | 75 | latitud del corte superior (el respiradero) |
+| `--lat-max` | 75 | latitud del corte superior (el respiradero); ignorado con `--fit conformal` |
+| `--fit` | `stretch` | reparto de la imagen sobre la esfera: `stretch` o `conformal` |
 | `--repeat` | 1 | copias de la imagen alrededor de la pieza |
 | `--samples` | 300 | muestras a lo ancho; sube el detalle y el tamaño del fichero |
 | `--frame` | 0 | marco macizo al grosor máximo, en mm |
@@ -109,11 +110,34 @@ dejan la boca de abajo (portalámparas y cable) y el respiradero de arriba.
   `R + grosor`, y el grosor lo pone la imagen: sin marco el corte inferior queda
   ondulado (~1,6 mm de diferencia) y la lámpara se apoya en cuatro puntos. El
   marco fuerza esa banda al grosor máximo y el borde sale uniforme. El CLI avisa.
-- **`--repeat` es lo que evita que la imagen salga estirada.** Lo que manda es la
-  proporción del trozo de superficie que le toca a cada copia. Con la banda por
-  defecto (−45° a 75°), un tercio del ecuador es exactamente cuadrado, así que
-  `--repeat 3` deja una foto cuadrada sin deformar, sea cual sea el diámetro. El
-  CLI calcula la deformación y avisa si se pasa del ±15 %.
+- **`--repeat` fija la proporción.** Lo que manda es el trozo de superficie que le
+  toca a cada copia: `(360/repeat) : banda`. Con la banda por defecto (−45° a
+  75°), un tercio del ecuador es exactamente cuadrado, así que `--repeat 3` es la
+  proporción correcta para una foto cuadrada, sea cual sea el diámetro.
+
+#### Deformación: no hay opción sin coste
+
+Una esfera no se puede desplegar en un plano sin deformar algo (Gauss). Solo se
+elige **qué** se deforma:
+
+- **`--fit stretch`** (por defecto) es la proyección **equirectangular**: las
+  latitudes se reparten por igual. La escala horizontal vale entonces `cos(λ)`,
+  o sea que la imagen sale fiel solo en el ecuador y comprimida hacia los polos
+  (con la banda por defecto, hasta el 26 % en el borde de arriba). Eso **no es un
+  fallo**: es lo que pasa al meter una foto normal donde el formato espera una
+  imagen ya pre-deformada. Para envolver una esfera **completa** con una sola
+  copia, la fuente correcta es un equirectangular **2:1**.
+- **`--fit conformal`** espacia las latitudes según `1/cos(λ)` (Mercator
+  inverso), de modo que las formas quedan correctas en toda la superficie. A
+  cambio la banda deja de elegirse: sale de `--lat-min`, `--repeat` y la
+  proporción de la imagen. Y como el motivo se recoloca en latitud, hay que
+  mirar dónde acaba: con `--repeat 2` sube demasiado y se escorza; con
+  `--repeat 3` queda bien centrado pero el corte superior baja a 57° y la pieza
+  parece más un cuenco que una esfera.
+
+Consejo práctico que vale para las tres: **recorta la foto al motivo**. Una
+selfie con medio encuadre de ropa oscura convierte media lámpara en una zona
+lisa de 3 mm.
 
 ### Cómo funciona
 

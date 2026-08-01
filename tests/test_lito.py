@@ -5,7 +5,14 @@ import pytest
 from PIL import Image
 
 from theforge.cli import main
-from theforge.lito import LitoParams, lithophane, surfaces, thickness_map
+from theforge.lito import (
+    LitoParams,
+    horizontal_scale,
+    layout,
+    lithophane,
+    surfaces,
+    thickness_map,
+)
 from theforge.stl import check_mesh, read_binary_stl
 
 SAMPLES = 40  # suficiente para probar la topologia sin tardar
@@ -44,6 +51,16 @@ def uniform(valor: int, size=(32, 24)) -> Image.Image:
         pytest.param(
             LitoParams(samples=SAMPLES, curve="sphere", lat_min_deg=-80, lat_max_deg=85),
             id="esfera-casi-completa",
+        ),
+        pytest.param(
+            LitoParams(samples=SAMPLES, curve="sphere", fit="conformal", repeat=2),
+            id="esfera-conforme",
+        ),
+        pytest.param(
+            LitoParams(
+                samples=SAMPLES, curve="sphere", fit="conformal", repeat=2, frame_mm=6
+            ),
+            id="esfera-conforme-con-marco",
         ),
     ],
 )
@@ -92,7 +109,7 @@ def test_dimensiones_de_la_pieza_plana(gradient):
     malla = lithophane(gradient, params)
     minimo = malla.reshape(-1, 3).min(axis=0)
     maximo = malla.reshape(-1, 3).max(axis=0)
-    _, alto = params.surface_size(gradient)
+    alto = layout(gradient, params).height_mm
 
     assert maximo[0] - minimo[0] == pytest.approx(80.0)  # ancho en X
     assert (minimo[2], maximo[2]) == pytest.approx((0.0, alto))  # apoyada en Z=0
@@ -127,8 +144,9 @@ def test_la_imagen_no_sale_espejada_ni_del_reves(params):
     Se mira desde fuera (desde -Y), asi que la izquierda del observador es -X.
     """
     imagen = cuadrante_negro()
-    espesor = thickness_map(imagen, params)
-    front, _ = surfaces(espesor, params, params.surface_size(imagen))
+    lay = layout(imagen, params)
+    espesor = thickness_map(imagen, params, lay)
+    front, _ = surfaces(espesor, params, lay)
 
     grueso = espesor > (params.min_thickness + params.max_thickness) / 2
     centro = front[grueso].mean(axis=0)
@@ -140,9 +158,8 @@ def test_el_cilindro_cerrado_tiene_el_perimetro_pedido(gradient):
     params = LitoParams(width_mm=120.0, samples=SAMPLES, curve="cylindrical", arc_degrees=360)
     assert params.radius_mm == pytest.approx(120.0 / (2 * np.pi))
 
-    _, back = surfaces(
-        thickness_map(gradient, params), params, params.surface_size(gradient)
-    )
+    lay = layout(gradient, params)
+    _, back = surfaces(thickness_map(gradient, params, lay), params, lay)
     radios = np.linalg.norm(back[..., :2], axis=-1)
     assert radios == pytest.approx(params.radius_mm)
 
@@ -171,12 +188,51 @@ def test_la_esfera_apoya_en_z0_y_deja_las_dos_bocas(gradient):
     assert np.linalg.norm(arriba[:, :2], axis=1).min() > 1.0
 
 
-def test_la_esfera_no_deforma_la_imagen_con_repeat_3():
-    """Con la banda por defecto, un tercio del ecuador es cuadrado."""
-    params = LitoParams(curve="sphere", diameter_mm=100, repeat=3)
-    ancho, alto = params.surface_size()
-    assert ancho / 3 == pytest.approx(alto, rel=0.01)
-    assert params.stretch(Image.new("L", (640, 640))) == pytest.approx(1.0, rel=0.01)
+def test_la_esfera_con_stretch_solo_es_fiel_en_el_ecuador():
+    """La escala horizontal vale cos(latitud): la banda por defecto llega al 26%."""
+    cuadrada = Image.new("L", (640, 640))
+    params = LitoParams(curve="sphere", diameter_mm=100, repeat=3, fit="stretch")
+    lay = layout(cuadrada, params)
+
+    # Un tercio del ecuador mide lo mismo que la banda: fiel en el ecuador.
+    assert lay.width_mm / 3 == pytest.approx(lay.height_mm, rel=0.01)
+
+    minimo, maximo = horizontal_scale(lay, params)
+    assert maximo == pytest.approx(1.0, rel=0.01)  # el ecuador esta dentro de la banda
+    assert minimo == pytest.approx(np.cos(np.radians(75.0)), rel=0.02)
+
+
+def test_el_mapeo_conforme_no_deforma_en_ninguna_latitud():
+    cuadrada = Image.new("L", (640, 640))
+    params = LitoParams(curve="sphere", diameter_mm=120, repeat=2, fit="conformal")
+    lay = layout(cuadrada, params)
+
+    assert horizontal_scale(lay, params) == (1.0, 1.0)
+
+    # El corte superior lo deriva de la imagen, no de lat_max_deg.
+    lat_min, lat_max = lay.lat_degrees
+    assert lat_min == pytest.approx(-45.0)
+    assert lat_max == pytest.approx(78.1, abs=0.2)
+
+    # Y la comprobacion de fondo: en cada fila, el paso vertical entre latitudes
+    # debe seguir al horizontal, que se encoge con cos(lat).
+    paso = np.diff(lay.lat)
+    cos_medio = np.cos((lay.lat[:-1] + lay.lat[1:]) / 2)
+    assert paso / cos_medio == pytest.approx((paso / cos_medio)[0], rel=0.01)
+
+
+def test_conformal_con_imagen_apaisada_abre_menos_banda():
+    """Una imagen 2:1 ocupa la mitad de banda de Mercator que una cuadrada."""
+    params = LitoParams(curve="sphere", repeat=2, fit="conformal")
+    alta = layout(Image.new("L", (640, 640)), params).lat_degrees[1]
+    ancha = layout(Image.new("L", (1280, 640)), params).lat_degrees[1]
+    assert ancha < alta
+
+
+def test_el_marco_que_no_cabe_falla_en_la_esfera(gradient):
+    params = LitoParams(samples=SAMPLES, curve="sphere", frame_mm=80.0)
+    with pytest.raises(ValueError, match="no cabe"):
+        thickness_map(gradient, params)
 
 
 def test_repeat_tesela_la_imagen(gradient):
@@ -202,7 +258,7 @@ def test_repeat_tesela_la_imagen(gradient):
         {"curve": "sphere", "diameter_mm": 0},
         {"curve": "sphere", "lat_min_deg": 40, "lat_max_deg": 10},  # invertidas
         {"curve": "sphere", "lat_min_deg": -95},  # fuera del rango
-        {"curve": "sphere", "frame_mm": 80.0},  # no cabe en la banda
+        {"fit": "mercator"},  # no existe
     ],
 )
 def test_parametros_invalidos(kwargs):
