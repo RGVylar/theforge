@@ -75,6 +75,15 @@ def main() -> None:
         LitoParams(width_mm=180, curve="cylindrical", arc_degrees=360, samples=400),
     )
 
+    # Lampara esferica: la imagen repetida 3 veces, que con la banda de latitud
+    # por defecto la deja sin deformar. El marco hace que el borde de apoyo salga
+    # plano en vez de ondulado.
+    generar(
+        "lito_esfera",
+        imagen,
+        LitoParams(curve="sphere", diameter_mm=120, repeat=3, samples=480, frame_mm=6),
+    )
+
 
 if __name__ == "__main__":
     main()

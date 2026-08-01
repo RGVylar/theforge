@@ -34,6 +34,17 @@ def uniform(valor: int, size=(32, 24)) -> Image.Image:
             LitoParams(samples=SAMPLES, curve="cylindrical", arc_degrees=360, frame_mm=5),
             id="cilindro-cerrado-con-marco",
         ),
+        pytest.param(LitoParams(samples=SAMPLES, curve="sphere"), id="esfera"),
+        pytest.param(
+            LitoParams(samples=SAMPLES, curve="sphere", repeat=3), id="esfera-x3"
+        ),
+        pytest.param(
+            LitoParams(samples=SAMPLES, curve="sphere", frame_mm=5), id="esfera-con-marco"
+        ),
+        pytest.param(
+            LitoParams(samples=SAMPLES, curve="sphere", lat_min_deg=-80, lat_max_deg=85),
+            id="esfera-casi-completa",
+        ),
     ],
 )
 def test_la_malla_es_cerrada(gradient, params):
@@ -81,7 +92,7 @@ def test_dimensiones_de_la_pieza_plana(gradient):
     malla = lithophane(gradient, params)
     minimo = malla.reshape(-1, 3).min(axis=0)
     maximo = malla.reshape(-1, 3).max(axis=0)
-    alto = params.height_mm(gradient)
+    _, alto = params.surface_size(gradient)
 
     assert maximo[0] - minimo[0] == pytest.approx(80.0)  # ancho en X
     assert (minimo[2], maximo[2]) == pytest.approx((0.0, alto))  # apoyada en Z=0
@@ -117,21 +128,64 @@ def test_la_imagen_no_sale_espejada_ni_del_reves(params):
     """
     imagen = cuadrante_negro()
     espesor = thickness_map(imagen, params)
-    front, _ = surfaces(espesor, params, params.height_mm(imagen))
+    front, _ = surfaces(espesor, params, params.surface_size(imagen))
 
     grueso = espesor > (params.min_thickness + params.max_thickness) / 2
     centro = front[grueso].mean(axis=0)
     assert centro[0] < 0  # izquierda
-    assert centro[2] > params.height_mm(imagen) / 2  # arriba
+    assert centro[2] > front[..., 2].max() / 2  # arriba
 
 
 def test_el_cilindro_cerrado_tiene_el_perimetro_pedido(gradient):
     params = LitoParams(width_mm=120.0, samples=SAMPLES, curve="cylindrical", arc_degrees=360)
     assert params.radius_mm == pytest.approx(120.0 / (2 * np.pi))
 
-    _, back = surfaces(thickness_map(gradient, params), params, params.height_mm(gradient))
+    _, back = surfaces(
+        thickness_map(gradient, params), params, params.surface_size(gradient)
+    )
     radios = np.linalg.norm(back[..., :2], axis=-1)
     assert radios == pytest.approx(params.radius_mm)
+
+
+def test_la_esfera_apoya_en_z0_y_deja_las_dos_bocas(gradient):
+    params = LitoParams(
+        samples=SAMPLES, curve="sphere", diameter_mm=100, lat_min_deg=-45, lat_max_deg=75
+    )
+    malla = lithophane(gradient, params)
+    puntos = malla.reshape(-1, 3)
+    radio = params.radius_mm
+
+    assert puntos[:, 2].min() == pytest.approx(0.0)  # apoyada en la cama
+
+    # La boca de abajo mide 2*R*cos(lat) en la cara interior. Se mide sobre los
+    # vertices que estan a la altura del corte, no sobre el maximo de la pieza.
+    en_el_suelo = puntos[puntos[:, 2] < puntos[:, 2].min() + 1e-6]
+    assert len(en_el_suelo) > 0
+    esperado = radio * np.cos(np.radians(params.lat_min_deg))
+    assert np.linalg.norm(en_el_suelo[:, :2], axis=1).max() == pytest.approx(
+        esperado + params.max_thickness * np.cos(np.radians(params.lat_min_deg)), rel=0.05
+    )
+
+    # Y arriba queda otro agujero: ningun vertice llega al eje.
+    arriba = puntos[puntos[:, 2] > puntos[:, 2].max() - 1e-6]
+    assert np.linalg.norm(arriba[:, :2], axis=1).min() > 1.0
+
+
+def test_la_esfera_no_deforma_la_imagen_con_repeat_3():
+    """Con la banda por defecto, un tercio del ecuador es cuadrado."""
+    params = LitoParams(curve="sphere", diameter_mm=100, repeat=3)
+    ancho, alto = params.surface_size()
+    assert ancho / 3 == pytest.approx(alto, rel=0.01)
+    assert params.stretch(Image.new("L", (640, 640))) == pytest.approx(1.0, rel=0.01)
+
+
+def test_repeat_tesela_la_imagen(gradient):
+    """Cada copia del mapa de grosores debe ser identica a la siguiente."""
+    params = LitoParams(samples=60, curve="sphere", repeat=3)
+    espesor = thickness_map(gradient, params)
+    copias = np.split(espesor, 3, axis=1)
+    assert copias[0] == pytest.approx(copias[1])
+    assert copias[1] == pytest.approx(copias[2])
 
 
 @pytest.mark.parametrize(
@@ -144,6 +198,11 @@ def test_el_cilindro_cerrado_tiene_el_perimetro_pedido(gradient):
         {"samples": 1},
         {"frame_mm": 60.0},  # no cabe en 100 mm de ancho
         {"gamma": 0},
+        {"repeat": 0},
+        {"curve": "sphere", "diameter_mm": 0},
+        {"curve": "sphere", "lat_min_deg": 40, "lat_max_deg": 10},  # invertidas
+        {"curve": "sphere", "lat_min_deg": -95},  # fuera del rango
+        {"curve": "sphere", "frame_mm": 80.0},  # no cabe en la banda
     ],
 )
 def test_parametros_invalidos(kwargs):

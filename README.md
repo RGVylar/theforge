@@ -12,13 +12,27 @@ Sin CAD pesado: la geometría se escribe a mano como STL binario con numpy. Las
 | Módulo | Estado |
 | --- | --- |
 | `stl.py` | escritura/lectura de STL binario, cosido de superficies, comprobación de malla cerrada |
-| `lito.py` | generador de litofanías (plana y cilíndrica) |
+| `lito.py` | generador de litofanías (plana, cilíndrica y esférica) |
 | `cli.py` | `forge lito ...` |
 | resto del roadmap | sin empezar |
 
+## Instalación
+
+Hace falta Python 3.12+ y dos paquetes:
+
+```bash
+python -m pip install numpy pillow
+```
+
+Comprueba que el intérprete que usas es el que los tiene:
+
+```bash
+python -c "import numpy, PIL; print(numpy.__version__, PIL.__version__)"
+```
+
 ## Uso
 
-Sin instalar nada:
+Sin instalar el paquete:
 
 ```bash
 python -m theforge lito foto.jpg -o foto.stl --width 100 --frame 3
@@ -47,11 +61,15 @@ python -m pytest
 
 | Opción | Por defecto | Qué hace |
 | --- | --- | --- |
-| `--width` | 100 | ancho de la pieza en mm; el alto sale del aspecto de la imagen |
+| `--width` | 100 | ancho de la pieza en mm; el alto sale del aspecto de la imagen. Ignorado en `sphere` |
 | `--min-thickness` | 0.8 | grosor en las zonas claras |
 | `--max-thickness` | 3.0 | grosor en las zonas oscuras |
-| `--curve` | `flat` | `flat` o `cylindrical` |
+| `--curve` | `flat` | `flat`, `cylindrical` o `sphere` |
 | `--arc` | 180 | grados de arco si es cilíndrica; **360 cierra el cilindro sin costura** |
+| `--diameter` | 100 | diámetro de la esfera en mm |
+| `--lat-min` | −45 | latitud del corte inferior de la esfera (la boca del cableado) |
+| `--lat-max` | 75 | latitud del corte superior (el respiradero) |
+| `--repeat` | 1 | copias de la imagen alrededor de la pieza |
 | `--samples` | 300 | muestras a lo ancho; sube el detalle y el tamaño del fichero |
 | `--frame` | 0 | marco macizo al grosor máximo, en mm |
 | `--gamma` | 1.0 | <1 aclara los medios tonos, >1 los oscurece |
@@ -67,6 +85,36 @@ python -m theforge lito retrato.jpg --width 120 --max-thickness 3.2 --frame 4 --
 python -m theforge lito paisaje.png --curve cylindrical --arc 360 --width 180 --samples 500
 ```
 
+Lámpara esférica con la foto repetida tres veces alrededor:
+
+```bash
+python -m theforge lito retrato.jpg --curve sphere --diameter 120 --repeat 3 --samples 720 --frame 6
+```
+
+### La esfera
+
+La esfera va truncada arriba y abajo. No es un capricho: sin truncar habría
+triángulos degenerados en los polos, y además sería inimprimible. Los dos cortes
+dejan la boca de abajo (portalámparas y cable) y el respiradero de arriba.
+
+- **`--lat-min` lo manda la impresión, no el cable.** En una esfera la pendiente
+  de la pared es `dr/dz = −tan(latitud)`, así que el voladizo respecto a la
+  vertical coincide con la latitud del corte. A −45° el voladizo máximo es de 45°
+  y se imprime sin soportes; por debajo de eso hacen falta, justo sobre la
+  superficie que se ve. El precio es una boca grande: `2·R·cos(45°) ≈ 1,41·R`.
+- **`--lat-max` no debe pasar de ~80°.** Más arriba la pared se vuelve casi
+  horizontal y cada capa se desplaza hacia dentro más de lo que mide el grosor,
+  o sea que tendría que puentear al aire.
+- **Usa `--frame` siempre en la esfera.** El borde exterior está a radio
+  `R + grosor`, y el grosor lo pone la imagen: sin marco el corte inferior queda
+  ondulado (~1,6 mm de diferencia) y la lámpara se apoya en cuatro puntos. El
+  marco fuerza esa banda al grosor máximo y el borde sale uniforme. El CLI avisa.
+- **`--repeat` es lo que evita que la imagen salga estirada.** Lo que manda es la
+  proporción del trozo de superficie que le toca a cada copia. Con la banda por
+  defecto (−45° a 75°), un tercio del ecuador es exactamente cuadrado, así que
+  `--repeat 3` deja una foto cuadrada sin deformar, sea cual sea el diámetro. El
+  CLI calcula la deformación y avisa si se pasa del ±15 %.
+
 ### Cómo funciona
 
 Imagen → escala de grises → remuestreo a la rejilla (LANCZOS, que hace de
@@ -75,9 +123,14 @@ antialias) → grosor invertido (`oscuro = grueso`) → dos rejillas de vértice
 
 La pieza sale **ya orientada para imprimir de pie**: X = ancho, Z = alto, apoyada
 en Z = 0, con el grosor creciendo hacia −Y y la cara trasera en el plano Y = 0. En
-la cilíndrica, el eje es Z y la cara interior es un cilindro liso de radio
-`ancho / ángulo_en_radianes`. Mirando la pieza desde fuera, la imagen se ve sin
-espejar.
+la cilíndrica y la esférica el eje es Z y la cara interior es lisa. Mirando la
+pieza desde fuera, la imagen se ve sin espejar.
+
+Las tres formas comparten la misma malla: dos rejillas de vértices con idéntica
+topología cosidas por el borde. Cambia solo el mapeo de `(u, v)` a coordenadas.
+La esfera y el cilindro de 360° se cierran sobre sí mismos en `u`, así que tienen
+topología de toro en vez de esfera — su característica de Euler es 0, no 2, y eso
+es correcto.
 
 Cada malla se valida antes de escribirla: cada arista debe aparecer en
 exactamente dos triángulos y recorrida en sentidos opuestos, sin triángulos
@@ -117,6 +170,19 @@ Impresora prevista: Bambu Lab A1, boquilla 0.4, Bambu Studio / Orca.
 - `[SUPUESTO]` `--gamma 0.8` suele hacer falta con fotos oscuras: si no, los medios
   tonos se van todos a grosor máximo y la litofanía sale "quemada" en negro.
 - `[SUPUESTO]` Retroiluminar con LED difuso blanco cálido, no con un LED puntual.
+
+Para la lámpara esférica, además:
+
+- `[GEOMETRÍA]` Con `--lat-min -45` el voladizo máximo es de 45°, en el arranque.
+  No necesita soportes si tu perfil aguanta 45°, que es lo normal.
+- `[GEOMETRÍA]` La pieza apoya en un círculo del diámetro de la boca inferior. Es
+  un chaflán a 45°, o sea que la primera capa es una línea muy fina que se
+  ensancha enseguida. **Brim obligatorio.**
+- `[SUPUESTO]` El LED va dentro, así que el calor se acumula: de ahí el
+  respiradero de arriba. Con LED es poca cosa, pero no la cierres del todo.
+- `[SUPUESTO]` Una esfera de 120 mm son ~120 g de PLA y bastantes horas. Antes de
+  lanzarla, imprime una litofanía plana con la misma foto y los mismos grosores
+  para validar el contraste.
 
 Cuando tenga la A1 y una tirada real, este apartado se reescribe con números
 medidos y desaparecen los `[SUPUESTO]`.
