@@ -22,6 +22,13 @@ from theforge.lito import (
     lithophane,
     load_grayscale,
 )
+from theforge.ornament import (
+    POR_DEFECTO,
+    STYLES,
+    contact_sheet,
+    ink_fraction,
+    sphere_band,
+)
 from theforge.stl import check_mesh, write_binary_stl
 
 # Densidad tipica del PLA; solo para dar una idea del material, no es una
@@ -207,6 +214,78 @@ def cmd_lito(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tamano(texto: str) -> tuple[int, int]:
+    """Convierte 3600x1200 en (3600, 1200)."""
+    try:
+        ancho, alto = (int(v) for v in texto.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"tamano invalido: {texto!r}, se espera ANCHOxALTO")
+    if ancho < 2 or alto < 2:
+        raise argparse.ArgumentTypeError("el tamano debe ser de al menos 2x2")
+    return ancho, alto
+
+
+def _add_ornament_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "ornament",
+        help="compone la banda decorada que luego envuelve la esfera",
+        description="Medallon con la foto y ornamento procedural alrededor. "
+        "La salida es un PNG que se le pasa a 'forge lito --curve sphere --repeat 1'.",
+    )
+    p.add_argument("image", type=Path, help="foto para el medallon")
+    p.add_argument("-o", "--output", type=Path, help="PNG de salida")
+    p.add_argument(
+        "--style", choices=tuple(STYLES), default=POR_DEFECTO, help=f"({POR_DEFECTO})"
+    )
+    p.add_argument(
+        "--size", type=_tamano, default=(3600, 1200), help="ANCHOxALTO del PNG (3600x1200)"
+    )
+    p.add_argument("--lat-min", type=float, default=-45.0, help="igual que en lito (-45)")
+    p.add_argument("--lat-max", type=float, default=75.0, help="igual que en lito (75)")
+    p.add_argument(
+        "--medallion", type=float, default=0.82, help="diametro del medallon, 0-1 (0.82)"
+    )
+    p.add_argument(
+        "--sheet",
+        action="store_true",
+        help="hoja de pruebas con todos los estilos en vez de una sola banda",
+    )
+    p.set_defaults(func=cmd_ornament)
+
+
+def cmd_ornament(args: argparse.Namespace) -> int:
+    foto = load_grayscale(args.image)
+
+    if args.sheet:
+        salida = args.output or args.image.with_name("hoja_estilos.png")
+        # Para elegir estilo no hace falta resolucion: se mira y se decide.
+        hoja = contact_sheet(foto, size=(1200, 400))
+        hoja.save(salida)
+        print(f"hoja      {len(STYLES)} estilos: {', '.join(STYLES)}")
+        print(f"salida    {salida}")
+        return 0
+
+    salida = args.output or args.image.with_name(f"banda_{args.style}.png")
+    banda = sphere_band(
+        foto,
+        args.size,
+        lat_min_deg=args.lat_min,
+        lat_max_deg=args.lat_max,
+        estilo=args.style,
+        medallion=args.medallion,
+    )
+    banda.save(salida)
+
+    print(f"estilo    {args.style}, {ink_fraction(banda):.0%} de la superficie con relieve")
+    print(f"banda     {banda.width}x{banda.height} px, latitudes {args.lat_min:g} a {args.lat_max:g}")
+    print(f"salida    {salida}")
+    print(
+        f"siguiente forge lito {salida} --curve sphere --repeat 1 --frame 6 "
+        f"--lat-min {args.lat_min:g} --lat-max {args.lat_max:g}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forge", description="Herramientas de impresion 3D."
@@ -214,6 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"theforge {__version__}")
     sub = parser.add_subparsers(dest="comando", required=True)
     _add_lito_parser(sub)
+    _add_ornament_parser(sub)
     return parser
 
 

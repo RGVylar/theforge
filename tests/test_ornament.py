@@ -4,20 +4,28 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from theforge.ornament import FONDO, TINTA, acanthus_field, sphere_band
+from theforge.ornament import (
+    FONDO,
+    STYLES,
+    TINTA,
+    contact_sheet,
+    ink_fraction,
+    ornament_field,
+    sphere_band,
+)
 
 TAMANO = (600, 200)
 
 
 @pytest.fixture(scope="module")
 def campo() -> np.ndarray:
-    return np.asarray(acanthus_field(TAMANO), dtype=int)
+    return np.asarray(ornament_field(TAMANO), dtype=int)
 
 
 def test_el_dibujo_es_determinista():
     """Sin random: la misma llamada tiene que dar el mismo dibujo."""
-    uno = np.asarray(acanthus_field(TAMANO))
-    otro = np.asarray(acanthus_field(TAMANO))
+    uno = np.asarray(ornament_field(TAMANO))
+    otro = np.asarray(ornament_field(TAMANO))
     assert np.array_equal(uno, otro)
 
 
@@ -26,19 +34,37 @@ def test_los_grises_se_quedan_en_el_rango(campo):
     assert campo.max() <= FONDO + 1
 
 
-def test_hay_ornamento_de_verdad(campo):
-    """Ni lienzo en blanco ni manchurron: entre el 10% y el 60% con tinta."""
-    con_tinta = (campo < (FONDO + TINTA) / 2).mean()
-    assert 0.10 < con_tinta < 0.60
+@pytest.mark.parametrize("nombre", tuple(STYLES))
+def test_todos_los_estilos_dibujan_algo_razonable(nombre):
+    """Ni lienzo en blanco ni manchurron, y con los bordes bien puestos."""
+    campo = ornament_field(TAMANO, nombre)
+    assert 0.10 < ink_fraction(campo) < 0.60
+    pixeles = np.asarray(campo, dtype=int)
+    assert np.array_equal(pixeles, pixeles[:, ::-1])  # simetrico
+    assert np.array_equal(pixeles[:, 0], pixeles[:, -1])  # empalma al envolver
 
 
-def test_es_simetrico_respecto_del_centro(campo):
-    assert np.array_equal(campo, campo[:, ::-1])
+def test_los_estilos_se_distinguen_de_verdad():
+    """Si dos estilos dieran lo mismo, tener dos no serviria de nada."""
+    campos = {n: np.asarray(ornament_field(TAMANO, n)) for n in STYLES}
+    nombres = list(campos)
+    for i, uno in enumerate(nombres):
+        for otro in nombres[i + 1 :]:
+            diferencia = np.abs(campos[uno] - campos[otro].astype(int)).mean()
+            assert diferencia > 5, f"{uno} y {otro} salen casi iguales"
 
 
-def test_empalma_al_envolver(campo):
-    """La primera y la ultima columna son el mismo meridiano de la esfera."""
-    assert np.array_equal(campo[:, 0], campo[:, -1])
+def test_el_acanto_es_mas_denso_que_el_resto():
+    """El horror vacui es el estilo, no un exceso del estilo."""
+    densidad = {n: ink_fraction(ornament_field(TAMANO, n)) for n in STYLES}
+    assert densidad["acanthus"] == max(densidad.values())
+    assert densidad["acanthus"] > densidad["scroll"] * 1.5
+
+
+def test_la_hoja_de_pruebas_lleva_todos_los_estilos():
+    hoja = contact_sheet(Image.new("L", (100, 100), 128), size=(300, 100))
+    assert hoja.width == 300
+    assert hoja.height > 100 * len(STYLES)
 
 
 def test_la_banda_lleva_el_medallon_centrado():

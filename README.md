@@ -13,7 +13,8 @@ Sin CAD pesado: la geometría se escribe a mano como STL binario con numpy. Las
 | --- | --- |
 | `stl.py` | escritura/lectura de STL binario, cosido de superficies, comprobación de malla cerrada |
 | `lito.py` | generador de litofanías (plana, cilíndrica y esférica) |
-| `cli.py` | `forge lito ...` |
+| `ornament.py` | ornamento procedural y composición de bandas con medallón |
+| `cli.py` | `forge lito ...`, `forge ornament ...` |
 | resto del roadmap | sin empezar |
 
 ## Instalación
@@ -138,6 +139,56 @@ elige **qué** se deforma:
 Consejo práctico que vale para las tres: **recorta la foto al motivo**. Una
 selfie con medio encuadre de ropa oscura convierte media lámpara en una zona
 lisa de 3 mm.
+
+## Lámpara con medallón y ornamento
+
+Repetir la misma foto tres veces alrededor funciona, pero se nota. La
+alternativa es un **medallón** con una sola foto y ornamento rellenando el
+resto, que es como se resolvía esto en un objeto decorativo de verdad. Son dos
+pasos:
+
+```bash
+python -m theforge ornament retrato.jpg --style acanthus -o banda.png
+```
+
+```bash
+python -m theforge lito banda.png --curve sphere --diameter 120 --repeat 1 --frame 6 -o lampara.stl
+```
+
+El primer comando imprime el segundo ya montado, con las latitudes que le
+correspondan.
+
+### Estilos
+
+No hay tres generadores, hay uno parametrizado: una espina que se enrolla con
+lóbulos alternos. Lo que cambia son cuatro números de `Style` — sobre todo si el
+lóbulo acaba **romo** (hoja) o **afilado** (pincho), y cuántas capas se dibujan.
+
+| Estilo | Qué es | Tinta |
+| --- | --- | --- |
+| `acanthus` | acanto barroco, cinco capas hasta que no queda hueco | ~38 % |
+| `tribal` | trazo grueso que afila en punta, pocas piezas y grandes | ~29 % |
+| `scroll` | rocalla fina y aireada | ~15 % |
+
+Para elegir sin generar un solo STL, la hoja de pruebas:
+
+```bash
+python -m theforge ornament retrato.jpg --sheet
+```
+
+Dos detalles del diseño:
+
+- **El dibujo empalma solo.** Se dibuja la mitad derecha y se espeja, con lo que
+  el campo es simétrico respecto del centro *y* de los bordes: la primera y la
+  última columna acaban siendo idénticas, que es justo lo que hace falta al
+  cerrar la esfera. Hay un test que lo comprueba.
+- **El medallón se pre-deforma.** Cada fila se ensancha por `1/cos(λ)` antes de
+  recortarla en círculo, así que sobre la esfera se ve circular en vez de
+  aperado. Es la pre-deformación que lleva un equirectangular de verdad, y aquí
+  se puede aplicar porque la imagen la generamos nosotros.
+
+Si el ornamento se ve poco a contraluz, lo que hay que tocar es el gris del
+fondo (`FONDO` en `ornament.py`), no los grosores.
 
 ### Cómo funciona
 
