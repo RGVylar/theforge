@@ -202,6 +202,15 @@ def test_la_esfera_con_stretch_solo_es_fiel_en_el_ecuador():
     assert minimo == pytest.approx(np.cos(np.radians(75.0)), rel=0.02)
 
 
+def test_la_deformacion_tiene_en_cuenta_la_proporcion_de_la_imagen():
+    """Una banda 3:1 con repeat=1 llena la esfera igual que una cuadrada con 3."""
+    params = LitoParams(curve="sphere", diameter_mm=120, repeat=1)
+    lay = layout(Image.new("L", (3600, 1200)), params)
+    minimo, maximo = horizontal_scale(lay, params)
+    assert maximo == pytest.approx(1.0, rel=0.01)  # fiel en el ecuador
+    assert minimo == pytest.approx(np.cos(np.radians(75.0)), rel=0.02)
+
+
 def test_el_mapeo_conforme_no_deforma_en_ninguna_latitud():
     cuadrada = Image.new("L", (640, 640))
     params = LitoParams(curve="sphere", diameter_mm=120, repeat=2, fit="conformal")

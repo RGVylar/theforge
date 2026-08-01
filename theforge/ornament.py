@@ -25,18 +25,25 @@ TINTA = 25  # gris del ornamento: casi el grosor maximo
 SUPERMUESTREO = 2  # se dibuja al doble y se reduce, que es el antialias
 
 
-def _log_spiral(pasos: int, vueltas: float, decaimiento: float) -> np.ndarray:
-    """Espiral logaritmica que arranca en radio 1 y se enrolla hacia dentro."""
-    theta = np.linspace(0.0, vueltas * 2 * math.pi, pasos)
-    radio = np.exp(-decaimiento * theta)
-    return np.column_stack([radio * np.cos(theta), radio * np.sin(theta)])
+def _curva(base, angulo: float, largo: float, giro: float, pasos: int = 48) -> np.ndarray:
+    """Curva de curvatura constante, parametrizada por longitud de arco.
+
+    Sale de `base` en la direccion `angulo` y gira `giro` radianes en total.
+    Integrar el angulo paso a paso evita tener que pelearse con centros y
+    signos, y da los puntos ya repartidos de forma uniforme.
+    """
+    t = np.linspace(0.0, 1.0, pasos)
+    ang = angulo + giro * t
+    paso = largo / (pasos - 1)
+    puntos = np.column_stack([np.cumsum(np.cos(ang)), np.cumsum(np.sin(ang))]) * paso
+    return puntos + np.asarray(base, dtype=float)
 
 
-def _colocar(puntos: np.ndarray, centro, angulo: float, escala: float) -> np.ndarray:
-    """Rota, escala y traslada una curva unitaria."""
-    c, s = math.cos(angulo), math.sin(angulo)
-    rot = np.array([[c, -s], [s, c]])
-    return puntos @ rot.T * escala + np.asarray(centro, dtype=float)
+def _direccion(puntos: np.ndarray, i: int) -> float:
+    """Angulo de la tangente de la curva en el punto i."""
+    j = min(i + 1, len(puntos) - 1)
+    dx, dy = puntos[j] - puntos[max(i - 1, 0)]
+    return math.atan2(dy, dx)
 
 
 def _trazo(dibujo: ImageDraw.ImageDraw, puntos: np.ndarray, r0: float, r1: float) -> None:
@@ -52,36 +59,40 @@ def _trazo(dibujo: ImageDraw.ImageDraw, puntos: np.ndarray, r0: float, r1: float
         dibujo.ellipse([x - r, y - r, x + r, y + r], fill=TINTA)
 
 
-def _voluta(
+def _hoja(
     dibujo: ImageDraw.ImageDraw,
-    centro,
+    base,
     angulo: float,
-    escala: float,
-    profundidad: int,
+    largo: float,
+    ancho: float,
     lado: int = 1,
+    lobulos: int = 6,
 ) -> None:
-    """Voluta de acanto: se enrolla y echa volutas hijas en lados alternos."""
-    puntos = _log_spiral(140, vueltas=1.15, decaimiento=0.34)
-    puntos[:, 1] *= lado  # el lado decide hacia donde se enrolla
-    puntos = _colocar(puntos, centro, angulo, escala)
-    # Trazo fino: el ornamento tiene que leerse como traceria, no como mancha.
-    _trazo(dibujo, puntos, r0=escala * 0.055, r1=escala * 0.004)
+    """Hoja de acanto: una espina que se enrolla con lobulos alternos.
 
-    if profundidad <= 0:
-        return
-    # Las hijas salen del tramo ancho, que es donde de verdad brota la hoja.
-    for fraccion, giro, merma in ((0.14, 1.25, 0.46), (0.40, 1.0, 0.32)):
-        i = int(fraccion * (len(puntos) - 1))
-        tangente = puntos[min(i + 1, len(puntos) - 1)] - puntos[i]
-        base = math.atan2(tangente[1], tangente[0])
-        _voluta(
-            dibujo,
-            puntos[i],
-            base + lado * giro,
-            escala * merma,
-            profundidad - 1,
-            lado=-lado,
+    Los lobulos son lo que la distingue de una simple voluta: trazos cortos,
+    anchos y curvados hacia la punta, que le dan la carnosidad de la hoja.
+    Menguan segun se avanza por la espina, como en la hoja de verdad.
+    """
+    espina = _curva(base, angulo, largo, giro=lado * 2.5, pasos=64)
+    _trazo(dibujo, espina, r0=ancho, r1=ancho * 0.22)
+
+    for k, fraccion in enumerate(np.linspace(0.06, 0.78, lobulos)):
+        i = int(fraccion * (len(espina) - 1))
+        hacia = _direccion(espina, i)
+        # Alternos: uno al exterior de la curva y el siguiente al interior.
+        signo = lado if k % 2 == 0 else -lado
+        merma = 1.0 - fraccion
+        lobulo = _curva(
+            espina[i],
+            hacia + signo * 0.85,
+            largo * 0.34 * merma,
+            # Giro largo: el lobulo se enrosca en vez de salir disparado, y
+            # acaba en punta roma. Un lobulo que afila queda a pincho.
+            giro=signo * 3.2,
+            pasos=26,
         )
+        _trazo(dibujo, lobulo, r0=ancho * 0.72 * merma, r1=ancho * 0.30 * merma)
 
 
 def acanthus_field(size: tuple[int, int], escala: float = 0.34) -> Image.Image:
@@ -97,30 +108,50 @@ def acanthus_field(size: tuple[int, int], escala: float = 0.34) -> Image.Image:
     dibujo = ImageDraw.Draw(lienzo)
 
     w, h = lienzo.size
-    unidad = h * escala
+    grosor = h * 0.055 * escala / 0.34
 
-    # Tallo ondulado que recorre la banda y cose las volutas entre si.
-    fase = np.linspace(0, 2 * math.pi, 120)
-    tallo = np.column_stack([np.linspace(0, w, 120), h * 0.5 + h * 0.10 * np.sin(fase)])
-    _trazo(dibujo, tallo, r0=unidad * 0.030, r1=unidad * 0.030)
+    # Tallo ondulado que recorre la banda y cose las hojas entre si.
+    fase = np.linspace(0, 2 * math.pi, 160)
+    tallo = np.column_stack([np.linspace(0, w, 160), h * 0.5 + h * 0.13 * np.sin(fase)])
+    _trazo(dibujo, tallo, r0=grosor * 0.45, r1=grosor * 0.45)
 
-    # Volutas colgadas del tallo, alternando arriba y abajo. Se apoyan sobre el
-    # propio tallo para que no queden flotando.
-    for i, fraccion in enumerate(np.linspace(0.12, 0.94, 6)):
+    # Dos hojas grandes flanqueando el medallon, que es donde pide mas peso.
+    for lado in (1, -1):
+        _hoja(dibujo, (w * 0.02, h * 0.5), lado * 0.55, h * 1.05, grosor, lado=lado)
+
+    # Hojas colgadas del tallo, alternando arriba y abajo.
+    for i, fraccion in enumerate(np.linspace(0.30, 0.97, 4)):
         lado = 1 if i % 2 == 0 else -1
         j = int(fraccion * (len(tallo) - 1))
-        _voluta(dibujo, tallo[j], -lado * math.pi / 2, unidad * 0.62, 2, lado=lado)
+        _hoja(
+            dibujo,
+            tallo[j],
+            -lado * math.pi / 2 + lado * 0.5,
+            h * 0.62,
+            grosor * 0.8,
+            lado=lado,
+        )
 
-    # Dos hojas mayores flanqueando el medallon, que es donde pide mas peso.
+    # Y una menor en cada esquina, que si no quedan vacias. Sin pasarse: el
+    # fondo claro es el que ilumina, y comerselo apaga la lampara.
     for lado in (1, -1):
-        _voluta(dibujo, (w * 0.06, h * 0.5), lado * 0.5, unidad * 0.95, 2, lado=lado)
+        _hoja(
+            dibujo,
+            (w * 0.62, h * (0.5 + lado * 0.42)),
+            -lado * math.pi / 2 - lado * 0.9,
+            h * 0.30,
+            grosor * 0.5,
+            lado=-lado,
+            lobulos=4,
+        )
 
     lienzo = lienzo.resize((media, alto), Image.LANCZOS)
     completo = Image.new("L", size, FONDO)
     completo.paste(lienzo, (media, 0))
     completo.paste(lienzo.transpose(Image.FLIP_LEFT_RIGHT), (0, 0))
-    # El desenfoque convierte la silueta plana en relieve redondeado.
-    return completo.filter(ImageFilter.GaussianBlur(max(1.0, alto * 0.012)))
+    # El desenfoque convierte la silueta plana en relieve redondeado. Poco: lo
+    # justo para matar el canto, sin comerse el dibujo.
+    return completo.filter(ImageFilter.GaussianBlur(max(1.0, alto * 0.005)))
 
 
 def _prewarp_columns(imagen: Image.Image, escalas: np.ndarray) -> np.ndarray:

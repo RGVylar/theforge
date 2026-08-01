@@ -147,6 +147,7 @@ class Layout:
     cols: int
     width_mm: float
     height_mm: float
+    aspect: float  # alto/ancho de la imagen de origen
     lat: np.ndarray | None = None
 
     @property
@@ -169,7 +170,7 @@ def layout(image: Image.Image, params: LitoParams) -> Layout:
 
     if params.curve != SPHERE:
         ancho = params.width_mm
-        return Layout(rows, cols, ancho, ancho * aspecto)
+        return Layout(rows, cols, ancho, ancho * aspecto, aspecto)
 
     radio = params.radius_mm
     lat_min = math.radians(params.lat_min_deg)
@@ -188,6 +189,7 @@ def layout(image: Image.Image, params: LitoParams) -> Layout:
         cols=cols,
         width_mm=2 * math.pi * radio,
         height_mm=radio * float(lat[-1] - lat[0]),
+        aspect=aspecto,
         lat=lat,
     )
 
@@ -198,7 +200,9 @@ def horizontal_scale(lay: Layout, params: LitoParams) -> tuple[float, float]:
     1.0 es fiel. En la esfera con fit=stretch la escala horizontal vale
     cos(latitud), asi que solo el ecuador queda fiel.
     """
-    base = lay.width_mm / params.repeat / lay.height_mm
+    # El trozo de superficie que le toca a cada copia, comparado con la
+    # proporcion de la imagen que va a ocuparlo.
+    base = lay.width_mm / params.repeat / lay.height_mm * lay.aspect
     if params.curve != SPHERE:
         return base, base
     if params.fit == CONFORMAL:
