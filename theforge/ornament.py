@@ -43,6 +43,7 @@ class Style:
     """Los numeros que distinguen un estilo de otro."""
 
     nombre: str
+    forma: str = "hoja"  # "hoja" = raquis con foliolos; "llama" = haces de puas
     # Perfil de la pieza
     afilado: float = 1.4  # exponente del ancho; alto = afila antes
     panza: float = 0.55  # cuanto tarda en engordar desde la base
@@ -94,26 +95,27 @@ STYLES: dict[str, Style] = {
     # Laminas afiladas que se cruzan, con pinchos largos por encima.
     "tribal": Style(
         nombre="tribal",
-        afilado=2.6,  # afila a aguja
-        panza=0.45,
-        esbeltez=6.5,
-        lobulos=3,
-        foliolo=0.72,  # foliolos largos: son cuchillas, no lobulos
-        apertura=0.55,  # muy pegados al raquis
-        rizo=1.1,
-        dorso=0.85,  # casi simetricos, como una hoja de espada
-        giro_espina=1.2,
-        enroscado=2.4,
-        hojas_por_ramo=4,
+        forma="llama",
+        afilado=3.2,  # bordes hundidos y punta de aguja
+        panza=0.40,  # tambien afila por la base: pua, no cuchara
+        esbeltez=12.0,
+        # Giro largo: la pua se engancha en vez de salir disparada. Recta se
+        # lee como hoja de palmera, no como garra.
+        rizo=2.70,
+        dorso=0.42,  # asimetrica: un lomo y un filo
+        enroscado=1.7,
+        hojas_por_ramo=6,  # puas por haz
         ramos=(
-            (0.10, 0.50, -0.30, 1.25),
-            (0.50, 0.20, 2.55, 1.05),
-            (0.50, 0.80, -2.55, 1.05),
-            (0.90, 0.50, 0.25, 1.15),
+            (0.05, 0.50, -0.15, 0.92),
+            (0.34, 0.10, 1.25, 0.80),
+            (0.34, 0.90, -1.25, 0.80),
+            (0.66, 0.50, 2.95, 0.86),
+            (0.92, 0.16, 1.55, 0.66),
+            (0.92, 0.84, -1.55, 0.66),
         ),
-        pinchos=4,
+        pinchos=6,
         nervios=False,
-        canto=0.006,
+        canto=0.005,
     ),
 }
 
@@ -354,21 +356,59 @@ def _ramo(
     )
 
 
-def _pincho(
+def _llama(
     dibujo: ImageDraw.ImageDraw,
     base,
     angulo: float,
     largo: float,
     ancho: float,
     giro: float,
+    estilo: Style,
     canto: int,
 ) -> None:
-    """Lamina larga y fina que cruza por encima de todo lo demas."""
-    pasos = 48
-    espina = _curva(base, angulo, largo, giro=giro, pasos=pasos)
+    """Pua: puntiaguda por los dos extremos y con los bordes hundidos.
+
+    Es lo contrario de un foliolo. La hoja tiene panza y punta roma; la pua
+    afila a cero por los dos lados y su silueta se mete hacia dentro, que es
+    de donde sale el aire cortante del tribal. Que el ancho llegue a cero
+    exacto en la punta es lo que la deja como una aguja y no como un dedo.
+    """
+    pasos = 64
+    espina = _curva(base, angulo, largo, giro=giro, pasos=pasos, enroscado=estilo.enroscado)
     t = np.linspace(0.0, 1.0, pasos)
-    w = ancho * (1.0 - 0.995 * t) ** 2.6
-    _pieza(dibujo, espina, w, w, canto)
+    w = t**estilo.panza * (1.0 - t) ** estilo.afilado
+    w = ancho * w / w.max()
+    _pieza(dibujo, espina, w, w * estilo.dorso, canto)
+
+
+def _haz(
+    dibujo: ImageDraw.ImageDraw,
+    centro,
+    angulo: float,
+    largo: float,
+    ancho: float,
+    estilo: Style,
+    canto: int,
+    lado: int = 1,
+) -> None:
+    """Haz de puas que salen del mismo punto abriendose en abanico.
+
+    De la mas larga a la mas corta: asi las cortas quedan por encima y se ve
+    que se cruzan, que es la mitad del efecto.
+    """
+    cuantas = estilo.hojas_por_ramo
+    for k in range(cuantas):
+        f = k / max(cuantas - 1, 1)
+        _llama(
+            dibujo,
+            centro,
+            angulo + lado * (-0.60 + 1.55 * f),
+            largo * (1.0 - 0.42 * f),
+            ancho * (1.0 - 0.30 * f),
+            giro=lado * estilo.rizo * (0.55 + 1.1 * f),
+            estilo=estilo,
+            canto=canto,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -393,28 +433,43 @@ def ornament_field(size: tuple[int, int], estilo: Style | str = POR_DEFECTO) -> 
     canto = max(1, int(h * estilo.canto))
 
     for i, (x, y, angulo, escala) in enumerate(estilo.ramos):
-        _ramo(
-            dibujo,
-            (w * x, h * y),
-            angulo,
-            h * 0.92 * escala,  # tallo largo: las hojas se reparten por el
-            h * 0.105 * escala,
-            estilo,
-            canto=canto,
-            lado=1 if i % 2 == 0 else -1,
-        )
+        lado = 1 if i % 2 == 0 else -1
+        if estilo.forma == "llama":
+            _haz(
+                dibujo,
+                (w * x, h * y),
+                angulo,
+                h * 0.95 * escala,
+                h * 0.075 * escala,
+                estilo,
+                canto=canto,
+                lado=lado,
+            )
+        else:
+            _ramo(
+                dibujo,
+                (w * x, h * y),
+                angulo,
+                h * 0.92 * escala,  # tallo largo: las hojas se reparten por el
+                h * 0.105 * escala,
+                estilo,
+                canto=canto,
+                lado=lado,
+            )
 
-    # Los pinchos van los ultimos: tienen que quedar por encima.
+    # Las puas sueltas van las ultimas: cruzan por encima de todo y son las que
+    # atan la composicion en vez de dejar haces sueltos flotando.
     for k in range(estilo.pinchos):
         fraccion = (k + 0.5) / estilo.pinchos
         arriba = k % 2 == 0
-        _pincho(
+        _llama(
             dibujo,
-            (w * fraccion, h * (0.28 if arriba else 0.72)),
-            (-0.6 if arriba else 0.6) + (0.35 if k % 2 else -0.35),
-            h * 0.46,
-            h * 0.038,
-            giro=(1.0 if arriba else -1.0) * 1.1,
+            (w * fraccion, h * (0.14 if arriba else 0.86)),
+            (1.15 if arriba else -1.15) + (0.45 if k % 2 else -0.45),
+            h * 0.62,
+            h * 0.042,  # con algo de cuerpo: finas de mas se leen como aranazos
+            giro=(1.0 if arriba else -1.0) * 3.0,
+            estilo=estilo,
             canto=canto,
         )
 

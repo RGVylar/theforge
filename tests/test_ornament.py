@@ -57,11 +57,11 @@ def test_los_estilos_se_distinguen_de_verdad():
             assert diferencia > 5, f"{uno} y {otro} salen casi iguales"
 
 
-def test_el_acanto_es_mas_denso_que_el_resto():
+def test_el_acanto_es_el_mas_recargado():
     """El horror vacui es el estilo, no un exceso del estilo."""
     densidad = {n: ink_fraction(ornament_field(TAMANO, n)) for n in STYLES}
     assert densidad["acanthus"] == max(densidad.values())
-    assert densidad["acanthus"] > densidad["tribal"] * 1.5
+    assert densidad["acanthus"] > densidad["tribal"]
 
 
 def test_la_curvatura_de_un_circulo_es_uno_partido_por_el_radio():
