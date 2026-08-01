@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "theforge"
+version = "0.1.0"
+description = "Herramientas de impresion 3D: litofanias, analisis de G-code y mas."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+forge = "theforge.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["theforge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

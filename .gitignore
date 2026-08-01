@@ -1,0 +1,15 @@
+# Salidas de las herramientas
+*.stl
+*.gcode
+*.3mf
+examples/out/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
