@@ -15,6 +15,8 @@ Sin CAD pesado: la geometría se escribe a mano como STL binario con numpy. Las
 | `lito.py` | generador de litofanías (plana, cilíndrica y esférica) |
 | `ornament.py` | ornamento procedural y composición de bandas con medallón |
 | `compose.py` | proyectos de composición: JSON con forma + fondo + fotos colocadas |
+| `preview.py` | simulación de la litofanía a contraluz (Beer-Lambert) |
+| `studio.py` | servidor local del editor: banda, contraluz, info y exportación |
 | `tuner.py` | ajuste interactivo de estilos con sliders (tkinter) |
 | `cli.py` | `forge lito ...`, `forge ornament ...`, `forge tune` |
 | resto del roadmap | sin empezar |
@@ -225,6 +227,46 @@ Este JSON es el documento del futuro editor web (`forge studio`, en el
 roadmap): el editor solo manipulará este fichero y la banda de píxeles que
 devuelve el backend, nunca recalculará geometría por su cuenta.
 
+### El editor local
+
+```bash
+python -m theforge studio examples\out
+```
+
+Abre el navegador en `127.0.0.1:8756`. La carpeta que le pases es la **raíz del
+proyecto**: de ahí salen las fotos que puedes elegir y ahí se guardan las que
+importes.
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET /api/estilos` | patrones, formas y máscaras disponibles |
+| `GET /api/imagenes` | imágenes de la carpeta raíz, recursivo |
+| `POST /api/banda` | proyecto → PNG de la banda compuesta |
+| `POST /api/encendida` | proyecto → PNG de la simulación a contraluz |
+| `POST /api/info` | medidas, % de relieve y avisos de impresión |
+| `POST /api/stl` | proyecto → STL binario, **409 si la malla no es cerrada** |
+| `POST /api/subir` | guarda una imagen en la carpeta raíz |
+
+Decisiones que sostienen el diseño:
+
+- **Sin estado.** El proyecto entero viaja en cada petición y el servidor no
+  guarda nada entre llamadas. No hay sesión que se desincronice del navegador,
+  ni orden de peticiones que respetar, ni recarga que deje algo a medias.
+- **Solo `127.0.0.1`**, y toda ruta de fichero se resuelve dentro de la carpeta
+  raíz y se rechaza si escapa. Un proyecto es un JSON con rutas dentro; sin ese
+  filtro, pedir `../../../windows/...` sería leer lo que le diera la gana.
+- **Los nombres de subida se rechazan, no se sanean.** Guardar `../secreto.png`
+  como `secreto.png` sería hacer algo distinto de lo pedido sin decirlo.
+- **Exportar pasa por el servidor** porque el único sitio donde se puede
+  comprobar la malla es donde se construye. Si `check_mesh` no la da cerrada,
+  devuelve 409 y no hay fichero.
+
+Un detalle que sorprende al usarlo: la pestaña **Banda** sale al ancho del
+raster (1400 px por defecto) y la de **Encendida** al ancho de `samples`, que
+es la resolución real del mapa de grosores. No es un fallo — la vista encendida
+enseña el detalle que de verdad va a tener la pieza, y si se ve pixelada es que
+te falta `samples`.
+
 ### Ajustar un estilo
 
 ```bash
@@ -366,10 +408,8 @@ Nada de esto está implementado todavía.
 - **`bambu.py`** — control local por MQTT en modo LAN-only, cuando tenga la A1.
 - **`forge studio`** — el editor web local. El plan acordado, por fases:
   1. ~~Modelo de composición + `forge compose`~~ — **hecho** (`compose.py`).
-  2. Servidor local con stdlib (sin Flask): `POST /api/banda` (PNG),
-     `POST /api/encendida` (simulación a contraluz) y `POST /api/stl` (que se
-     niega a exportar si la malla no es cerrada). Sin estado: el JSON del
-     proyecto viaja en cada petición.
+  2. ~~Servidor local con stdlib, sin estado~~ — **hecho** (`studio.py`), con
+     una página mínima que ya ejercita todos los endpoints.
   3. El editor en el navegador: arrastrar/escalar/borrar fotos sobre la banda,
      elegir forma y patrón, pestañas Banda | Encendida | 3D (visor orbitable
      con un `three.js` vendorizado, ~600 KB, único código de terceros del

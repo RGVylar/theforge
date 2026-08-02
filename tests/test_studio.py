@@ -1,0 +1,275 @@
+"""Tests del servidor contra un servidor de verdad.
+
+Se levanta en un puerto libre y se le hacen peticiones HTTP reales, en vez de
+llamar a las funciones por dentro: lo que puede romperse aqui es justamente el
+pegamento (codigos de estado, tipos de contenido, cuerpos), y eso no se ve
+llamando a la funcion.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import struct
+import threading
+from http import HTTPStatus
+from http.client import HTTPConnection
+
+import numpy as np
+import pytest
+from PIL import Image
+
+from theforge.studio import crear_servidor, nombre_seguro, ruta_segura
+from theforge.studio import ErrorPeticion
+
+
+@pytest.fixture
+def raiz(tmp_path):
+    """Carpeta de proyecto con una foto dentro."""
+    Image.new("L", (60, 60), 0).save(tmp_path / "foto.png")
+    (tmp_path / "sub").mkdir()
+    Image.new("L", (40, 40), 128).save(tmp_path / "sub" / "otra.png")
+    return tmp_path
+
+
+@pytest.fixture
+def cliente(raiz):
+    servidor = crear_servidor(raiz, puerto=0, ancho_px=300, ancho_export_px=300)
+    hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
+    hilo.start()
+    conexion = HTTPConnection("127.0.0.1", servidor.server_address[1], timeout=30)
+
+    def peticion(metodo, ruta, cuerpo=None, cabeceras=None):
+        datos = cuerpo
+        cab = dict(cabeceras or {})
+        if isinstance(cuerpo, (dict, list)):
+            datos = json.dumps(cuerpo).encode()
+            cab["Content-Type"] = "application/json"
+        conexion.request(metodo, ruta, body=datos, headers=cab)
+        respuesta = conexion.getresponse()
+        return respuesta.status, respuesta.headers, respuesta.read()
+
+    yield peticion
+    conexion.close()
+    servidor.shutdown()
+    servidor.server_close()
+
+
+def proyecto_esfera(path="foto.png", **capa):
+    capas = []
+    if path:
+        capas = [{"type": "photo", "path": path, "cx": 0.5, "cy": 0.5,
+                  "scale": 0.6, "mask": "circle", "ring": True, "gamma": 1.0} | capa]
+    return {
+        "version": 1,
+        "shape": {"curve": "sphere", "diameter_mm": 100, "samples": 40,
+                  "min_thickness": 0.8, "max_thickness": 3.0, "frame_mm": 4,
+                  "lat_min_deg": -45.0, "lat_max_deg": 75.0},
+        "background": {"pattern": "fern"},
+        "layers": capas,
+    }
+
+
+# --------------------------------------------------------------------------
+# Rutas seguras: lo que impide que un proyecto lea toda la maquina
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "intento", ["../secreto.png", "..\\secreto.png", "sub/../../fuera.png", ""]
+)
+def test_una_ruta_que_escapa_de_la_raiz_se_rechaza(tmp_path, intento):
+    with pytest.raises(ErrorPeticion):
+        ruta_segura(tmp_path, intento)
+
+
+def test_una_ruta_dentro_de_la_raiz_se_admite(tmp_path):
+    assert ruta_segura(tmp_path, "sub/foto.png").name == "foto.png"
+
+
+@pytest.mark.parametrize("malo", ["../x.png", "a/b.png", ".oculto.png", "script.py", ""])
+def test_nombres_de_subida_invalidos(malo):
+    with pytest.raises(ErrorPeticion):
+        nombre_seguro(malo)
+
+
+def test_el_proyecto_no_puede_apuntar_fuera(cliente):
+    proyecto = proyecto_esfera(path="../fuera.png")
+    estado, _, cuerpo = cliente("POST", "/api/banda", proyecto)
+    assert estado == HTTPStatus.BAD_REQUEST
+    assert "fuera" in json.loads(cuerpo)["error"]
+
+
+# --------------------------------------------------------------------------
+# Endpoints
+# --------------------------------------------------------------------------
+
+
+def test_la_pagina_se_sirve(cliente):
+    estado, cabeceras, cuerpo = cliente("GET", "/")
+    assert estado == HTTPStatus.OK
+    assert cabeceras["Content-Type"].startswith("text/html")
+    assert b"theforge studio" in cuerpo
+
+
+def test_estilos_e_imagenes(cliente):
+    _, _, cuerpo = cliente("GET", "/api/estilos")
+    estilos = json.loads(cuerpo)
+    assert "acanthus" in estilos["patrones"]
+    assert "sphere" in estilos["formas"]
+
+    _, _, cuerpo = cliente("GET", "/api/imagenes")
+    # Recursivo y con separadores de URL, no de Windows.
+    assert set(json.loads(cuerpo)["imagenes"]) == {"foto.png", "sub/otra.png"}
+
+
+def test_banda_devuelve_un_png(cliente):
+    estado, cabeceras, cuerpo = cliente("POST", "/api/banda", proyecto_esfera())
+    assert estado == HTTPStatus.OK
+    assert cabeceras["Content-Type"] == "image/png"
+    imagen = Image.open(io.BytesIO(cuerpo))
+    assert imagen.width == 300
+    assert imagen.mode == "L"
+
+
+def test_encendida_es_distinta_de_la_banda(cliente):
+    """La simulacion invierte el sentido: lo grueso es lo que se ve oscuro."""
+    _, _, banda = cliente("POST", "/api/banda", proyecto_esfera())
+    _, _, encendida = cliente("POST", "/api/encendida", proyecto_esfera())
+    a = np.asarray(Image.open(io.BytesIO(banda)), dtype=float)
+    b = np.asarray(Image.open(io.BytesIO(encendida)).resize(Image.open(io.BytesIO(banda)).size),
+                   dtype=float)
+    assert np.abs(a - b).mean() > 5
+
+
+def test_info_trae_medidas_y_avisos(cliente):
+    _, _, cuerpo = cliente("POST", "/api/info", proyecto_esfera())
+    info = json.loads(cuerpo)
+    assert info["esfera"]["diametro_mm"] == 100
+    assert info["esfera"]["voladizo_grados"] == 45.0
+    assert info["superficie_mm"]["ancho"] > 0
+    assert info["avisos"] == []  # -45 y con marco: nada que avisar
+
+
+def test_info_avisa_de_lo_que_no_se_va_a_imprimir_bien(cliente):
+    proyecto = proyecto_esfera()
+    proyecto["shape"]["lat_min_deg"] = -70.0
+    proyecto["shape"]["frame_mm"] = 0.0
+    _, _, cuerpo = cliente("POST", "/api/info", proyecto)
+    avisos = " ".join(json.loads(cuerpo)["avisos"])
+    assert "soportes" in avisos
+    assert "marco" in avisos
+
+
+def test_stl_es_binario_valido_y_cerrado(cliente):
+    estado, cabeceras, cuerpo = cliente("POST", "/api/stl", proyecto_esfera())
+    assert estado == HTTPStatus.OK
+    assert cabeceras["Content-Type"] == "application/octet-stream"
+    assert "attachment" in cabeceras["Content-Disposition"]
+    assert not cuerpo.startswith(b"solid")  # no debe parecer STL ASCII
+    (cuantos,) = struct.unpack("<I", cuerpo[80:84])
+    assert len(cuerpo) == 84 + cuantos * 50
+
+
+# --------------------------------------------------------------------------
+# Errores
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "romper,esperado",
+    [
+        (lambda p: p.update(version=99), "version"),
+        (lambda p: p["shape"].update(curve="donut"), "curve"),
+        (lambda p: p["layers"][0].update(scale=9.0), "scale"),
+        (lambda p: p["layers"][0].update(path="no_existe.png"), "no existe"),
+        (lambda p: p.update(background={"pattern": "rococo"}), "patron"),
+    ],
+)
+def test_proyecto_invalido_da_400_con_mensaje(cliente, romper, esperado):
+    proyecto = proyecto_esfera()
+    romper(proyecto)
+    estado, _, cuerpo = cliente("POST", "/api/banda", proyecto)
+    assert estado == HTTPStatus.BAD_REQUEST
+    assert esperado in json.loads(cuerpo)["error"]
+
+
+def test_json_roto_y_cuerpo_vacio(cliente):
+    estado, _, cuerpo = cliente("POST", "/api/banda", b"{no es json",
+                                {"Content-Type": "application/json"})
+    assert estado == HTTPStatus.BAD_REQUEST
+    assert "JSON" in json.loads(cuerpo)["error"]
+
+    estado, _, _ = cliente("POST", "/api/banda")
+    assert estado == HTTPStatus.BAD_REQUEST
+
+
+def test_endpoints_desconocidos(cliente):
+    assert cliente("GET", "/api/inventado")[0] == HTTPStatus.NOT_FOUND
+    assert cliente("POST", "/api/inventado", {})[0] == HTTPStatus.NOT_FOUND
+    assert cliente("GET", "/no_existe.js")[0] == HTTPStatus.NOT_FOUND
+
+
+def test_la_conexion_no_se_desincroniza_tras_un_error(cliente):
+    """Regresion: responder sin leer el cuerpo rompe la conexion siguiente.
+
+    Con HTTP/1.1 el socket se reutiliza. Si una respuesta sale sin consumir el
+    cuerpo de su peticion, ese cuerpo se queda ahi y se interpreta como la
+    peticion siguiente: la de despues respondia 501 sin motivo aparente.
+    """
+    grande = proyecto_esfera()
+    grande["layers"][0]["path"] = "no_existe.png"  # provoca 400 con cuerpo largo
+    assert cliente("POST", "/api/banda", grande)[0] == HTTPStatus.BAD_REQUEST
+    assert cliente("POST", "/api/inventado", grande)[0] == HTTPStatus.NOT_FOUND
+    # Y despues de los dos errores, la conexion sigue sana.
+    estado, cabeceras, _ = cliente("POST", "/api/banda", proyecto_esfera())
+    assert estado == HTTPStatus.OK
+    assert cabeceras["Content-Type"] == "image/png"
+
+
+# --------------------------------------------------------------------------
+# Subida
+# --------------------------------------------------------------------------
+
+
+def test_subir_una_imagen(cliente, raiz):
+    buffer = io.BytesIO()
+    Image.new("RGB", (30, 20), (10, 200, 10)).save(buffer, format="PNG")
+    estado, _, cuerpo = cliente(
+        "POST", "/api/subir", buffer.getvalue(), {"X-Nombre-Fichero": "nueva.png"}
+    )
+    assert estado == HTTPStatus.OK
+    datos = json.loads(cuerpo)
+    assert datos == {"path": "nueva.png", "ancho": 30, "alto": 20}
+    assert (raiz / "nueva.png").is_file()
+
+
+def test_subir_dos_veces_no_pisa_la_anterior(cliente, raiz):
+    buffer = io.BytesIO()
+    Image.new("L", (10, 10), 0).save(buffer, format="PNG")
+    cliente("POST", "/api/subir", buffer.getvalue(), {"X-Nombre-Fichero": "foto.png"})
+    # foto.png ya existia en la raiz, asi que la nueva va con sufijo.
+    assert (raiz / "foto-2.png").is_file()
+
+
+def test_subir_algo_que_no_es_imagen(cliente, raiz):
+    estado, _, cuerpo = cliente(
+        "POST", "/api/subir", b"esto no es un png", {"X-Nombre-Fichero": "falsa.png"}
+    )
+    assert estado == HTTPStatus.BAD_REQUEST
+    assert "imagen" in json.loads(cuerpo)["error"]
+    assert not (raiz / "falsa.png").exists()
+
+
+def test_subir_con_nombre_peligroso(cliente):
+    buffer = io.BytesIO()
+    Image.new("L", (10, 10), 0).save(buffer, format="PNG")
+    estado, _, _ = cliente(
+        "POST", "/api/subir", buffer.getvalue(), {"X-Nombre-Fichero": "../fuera.png"}
+    )
+    assert estado == HTTPStatus.BAD_REQUEST
+
+
+def test_la_carpeta_raiz_tiene_que_existir(tmp_path):
+    with pytest.raises(ValueError, match="no existe"):
+        crear_servidor(tmp_path / "no_existe", puerto=0)

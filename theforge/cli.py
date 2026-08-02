@@ -338,6 +338,40 @@ def cmd_compose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_studio_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "studio",
+        help="abre el editor local en el navegador",
+        description="Servidor local (solo 127.0.0.1) con la previsualizacion de la "
+        "banda, la simulacion a contraluz y la exportacion a STL.",
+    )
+    p.add_argument(
+        "root",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="carpeta del proyecto: de aqui salen las fotos y aqui se suben (.)",
+    )
+    p.add_argument("--port", type=int, default=8756, help="puerto (8756); 0 = uno libre")
+    p.add_argument("--no-browser", action="store_true", help="no abrir el navegador")
+    p.add_argument(
+        "--preview-px", type=int, default=1400, help="ancho del raster de vista (1400)"
+    )
+    p.set_defaults(func=cmd_studio)
+
+
+def cmd_studio(args: argparse.Namespace) -> int:
+    from theforge.studio import servir
+
+    servir(
+        args.root,
+        puerto=args.port,
+        abrir_navegador=not args.no_browser,
+        ancho_px=args.preview_px,
+    )
+    return 0
+
+
 def _add_tune_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "tune",
@@ -372,6 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_lito_parser(sub)
     _add_ornament_parser(sub)
     _add_compose_parser(sub)
+    _add_studio_parser(sub)
     _add_tune_parser(sub)
     return parser
 
