@@ -286,6 +286,31 @@ def cmd_ornament(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_tune_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "tune",
+        help="ajusta los parametros de un estilo con sliders",
+        description="Ventana con sliders y dos previsualizaciones: una pieza suelta "
+        "y el campo completo. No guarda nada: copia un Style(...) al portapapeles.",
+    )
+    p.add_argument(
+        "--style", choices=tuple(STYLES), default=POR_DEFECTO, help=f"({POR_DEFECTO})"
+    )
+    p.add_argument("--width", type=int, default=640, help="ancho de la vista (640)")
+    p.set_defaults(func=cmd_tune)
+
+
+def cmd_tune(args: argparse.Namespace) -> int:
+    from theforge.tuner import abrir
+
+    try:
+        abrir(args.style, ancho=args.width)
+    except RuntimeError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forge", description="Herramientas de impresion 3D."
@@ -294,6 +319,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="comando", required=True)
     _add_lito_parser(sub)
     _add_ornament_parser(sub)
+    _add_tune_parser(sub)
     return parser
 
 

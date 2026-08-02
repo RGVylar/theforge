@@ -14,7 +14,8 @@ Sin CAD pesado: la geometría se escribe a mano como STL binario con numpy. Las
 | `stl.py` | escritura/lectura de STL binario, cosido de superficies, comprobación de malla cerrada |
 | `lito.py` | generador de litofanías (plana, cilíndrica y esférica) |
 | `ornament.py` | ornamento procedural y composición de bandas con medallón |
-| `cli.py` | `forge lito ...`, `forge ornament ...` |
+| `tuner.py` | ajuste interactivo de estilos con sliders (tkinter) |
+| `cli.py` | `forge lito ...`, `forge ornament ...`, `forge tune` |
 | resto del roadmap | sin empezar |
 
 ## Instalación
@@ -186,6 +187,33 @@ Para elegir sin generar un solo STL, la hoja de pruebas:
 python -m theforge ornament retrato.jpg --sheet
 ```
 
+### Ajustar un estilo
+
+```bash
+python -m theforge tune --style acanthus
+```
+
+Ventana con sliders (tkinter, que viene con Python: sin dependencias nuevas).
+Regenerar el dibujo cuesta entre 11 y 55 ms a tamaño de previsualización, así
+que arrastrar va fluido; los eventos se agrupan cada 60 ms para no encolar un
+redibujado por píxel.
+
+Tres decisiones de diseño que importan:
+
+- **Los sliders salen de `dataclasses.fields(Style)`**, no de una lista escrita
+  a mano. Al añadir un parámetro nuevo aparece solo. Hay un test que lo fija.
+- **Enseña dos vistas a la vez**: una pieza suelta y el campo completo. Los
+  fallos de forma solo se ven en la pieza aislada —el acanto parecía aceptable
+  hasta que se miró una hoja sola y resultó ser una sierra— y los de reparto
+  solo en el campo. Con una sola de las dos se afina a ciegas.
+- **No guarda nada ni edita el código.** El botón copia un `Style(...)` al
+  portapapeles y lo pegas tú en `STYLES`. Sin estado oculto ni ficheros que se
+  desincronicen. El fragmento omite los campos que no has tocado, y hay un test
+  que comprueba que al evaluarlo sale el mismo `Style`.
+
+La GUI en sí no está en los tests; lo que sí está es todo lo que puede romperse
+en silencio (construcción de sliders y serialización).
+
 Dos detalles del diseño:
 
 - **El dibujo empalma solo.** Se dibuja la mitad derecha y se espeja, con lo que
@@ -298,6 +326,10 @@ Nada de esto está implementado todavía.
 - **`gridfinity.py`** — organizadores de cajón paramétricos, reaprovechando el
   escritor de STL y el cosido de superficies de `stl.py`.
 - **`bambu.py`** — control local por MQTT en modo LAN-only, cuando tenga la A1.
+- **Interfaz web** — la ventana de tkinter cubre el ajuste de un estilo. Si en
+  algún momento hace falta algo mayor (comparar variantes en rejilla, guardar
+  presets, previsualizar la esfera en 3D), la puerta queda abierta. No está
+  cerrado, solo aplazado hasta que el uso lo pida.
 
 ## Estructura
 

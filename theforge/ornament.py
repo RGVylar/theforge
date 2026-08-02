@@ -647,6 +647,44 @@ def ornament_field(size: tuple[int, int], estilo: Style | str = POR_DEFECTO) -> 
     )
 
 
+def single_piece(size: tuple[int, int], estilo: Style | str = POR_DEFECTO) -> Image.Image:
+    """Una sola pieza del estilo, grande y sobre fondo limpio.
+
+    Mirar la pieza aislada es lo que permite corregir la forma. En el campo
+    completo el ruido de las vecinas tapa los defectos: el acanto parecia
+    aceptable hasta que se vio una hoja sola y resulto ser una sierra.
+    """
+    if isinstance(estilo, str):
+        estilo = STYLES[estilo]
+    ancho, alto = size
+    lienzo = Image.new("L", (ancho * 2, alto * 2), FONDO)
+    dibujo = ImageDraw.Draw(lienzo)
+    w, h = lienzo.size
+    canto = int(h * estilo.canto) if estilo.canto > 0 else 0
+    largo = w * 0.72
+
+    if estilo.forma == "astilla":
+        _astilla(
+            dibujo,
+            (w * 0.14, h * 0.80),
+            -0.85,
+            largo,
+            largo * 0.030,
+            estilo,
+            canto,
+            nivel=estilo.niveles,
+            suelo=h * estilo.ancho_minimo,
+        )
+    elif estilo.forma == "llama":
+        _haz(dibujo, (w * 0.12, h * 0.55), -0.35, largo, largo / estilo.esbeltez,
+             estilo, canto, lado=1)
+    else:
+        _hoja(dibujo, (w * 0.16, h * 0.78), -0.5, largo, largo / estilo.esbeltez,
+              estilo, lado=1, canto=canto)
+
+    return lienzo.resize(size, Image.LANCZOS)
+
+
 def ink_fraction(campo: Image.Image) -> float:
     """Proporcion de superficie con ornamento. Util para calibrar densidades."""
     valores = np.asarray(campo, dtype=int)
