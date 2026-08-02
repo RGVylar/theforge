@@ -160,15 +160,25 @@ correspondan.
 
 ### Estilos
 
-No hay tres generadores, hay uno parametrizado: una espina que se enrolla con
-lóbulos alternos. Lo que cambia son cuatro números de `Style` — sobre todo si el
-lóbulo acaba **romo** (hoja) o **afilado** (pincho), y cuántas capas se dibujan.
+Todas las piezas se construyen igual —una espina curva, un perfil de ancho, y un
+polígono relleno con contorno— pero cada estilo usa una **forma** distinta,
+porque no son variaciones del mismo dibujo sino lenguajes diferentes:
 
-| Estilo | Qué es | Tinta |
-| --- | --- | --- |
-| `acanthus` | acanto barroco, cinco capas hasta que no queda hueco | ~38 % |
-| `tribal` | trazo grueso que afila en punta, pocas piezas y grandes | ~29 % |
-| `scroll` | rocalla fina y aireada | ~15 % |
+| Estilo | Forma | Qué es | Tinta |
+| --- | --- | --- | --- |
+| `acanthus` | `hoja` | raquis con folíolos alternos, nervados y solapados | ~48 % |
+| `blackmetal` | `astilla` | maraña de filamentos ramificados con púas | ~37 % |
+| `fern` | `llama` | haces de púas afiladas que se cruzan en abanico | ~33 % |
+
+Lo que separa una hoja de una púa no es el grosor: la hoja tiene panza y punta
+roma y el ancho se queda al 1 %; la púa afila a **cero exacto** por los dos
+extremos y tiene los bordes hundidos. Y lo que separa la maraña de un helecho es
+el ángulo con que brota la rama hija: a 60° sale una fronda, a 17° sale una
+maraña barrida hacia fuera.
+
+La variedad de la maraña no viene de `random` sino de una secuencia áurea, así
+que el dibujo es el mismo en cada ejecución pero no tiene la regularidad que
+delata que lo ha generado una máquina.
 
 Para elegir sin generar un solo STL, la hoja de pruebas:
 
@@ -189,6 +199,20 @@ Dos detalles del diseño:
 
 Si el ornamento se ve poco a contraluz, lo que hay que tocar es el gris del
 fondo (`FONDO` en `ornament.py`), no los grosores.
+
+### El límite que impone la boquilla
+
+`blackmetal` tiene un `ancho_minimo` que impide que ningún filamento baje de
+~0,9 mm sobre la pieza, o sea dos líneas de boquilla. No es una decisión
+estética: un trazo más fino que un píxel no sale fino, **sale gris** — y un gris
+intermedio en una litofanía es grosor intermedio, es decir una superficie lisa
+donde debería haber un filamento.
+
+Eso pone un techo aritmético al estilo: los filamentos crecen como
+`hijas ^ niveles`, y cada uno ocupa como mínimo ese ancho. Con 5 niveles y 3
+hijas la banda sale al 86 % de tinta, o sea negra. Por eso son 4 niveles y 2
+hijas. **En una esfera más grande cabrían más**, porque el mínimo es absoluto en
+milímetros y la superficie crece con el cuadrado del diámetro.
 
 ### Cómo funciona
 

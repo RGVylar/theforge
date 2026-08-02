@@ -61,7 +61,18 @@ def test_el_acanto_es_el_mas_recargado():
     """El horror vacui es el estilo, no un exceso del estilo."""
     densidad = {n: ink_fraction(ornament_field(TAMANO, n)) for n in STYLES}
     assert densidad["acanthus"] == max(densidad.values())
-    assert densidad["acanthus"] > densidad["tribal"]
+
+
+def test_ningun_filamento_baja_del_ancho_imprimible():
+    """El suelo de grosor existe porque un trazo subpixel no sale fino.
+
+    Sale gris, o sea grosor intermedio, y en la pieza eso es una superficie
+    lisa en vez de un filamento. Si el suelo dejara de aplicarse, el campo se
+    llenaria de grises intermedios en lugar de negro y fondo.
+    """
+    campo = np.asarray(ornament_field((900, 300), "blackmetal"), dtype=int)
+    medios = ((campo > TINTA + 40) & (campo < FONDO - 40)).mean()
+    assert medios < 0.16, f"{medios:.0%} de la banda en grises intermedios"
 
 
 def test_la_curvatura_de_un_circulo_es_uno_partido_por_el_radio():

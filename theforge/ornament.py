@@ -43,7 +43,9 @@ class Style:
     """Los numeros que distinguen un estilo de otro."""
 
     nombre: str
-    forma: str = "hoja"  # "hoja" = raquis con foliolos; "llama" = haces de puas
+    # "hoja" = raquis con foliolos, "llama" = haces de puas, "astilla" = maraña
+    # de filamentos ramificados
+    forma: str = "hoja"
     # Perfil de la pieza
     afilado: float = 1.4  # exponente del ancho; alto = afila antes
     panza: float = 0.55  # cuanto tarda en engordar desde la base
@@ -60,6 +62,18 @@ class Style:
     hojas_por_ramo: int = 6
     ramos: tuple[tuple[float, float, float, float], ...] = ()  # x, y, angulo, escala
     pinchos: int = 0  # laminas finas sueltas que cruzan por encima
+
+    # Solo para forma="astilla"
+    semillas: int = 12  # troncos del nucleo; el doble sale radiando hacia fuera
+    niveles: int = 3  # cuantas veces ramifica
+    hijas: int = 3  # filamentos que brotan de cada uno
+    merma: float = 0.55  # cuanto encoge de largo cada generacion
+    merma_ancho: float = 0.50  # y de grosor; mas agresivo, para que acaben en pelo
+    apertura_hija: float = 0.32  # angulo con que brota; el que separa maraña de helecho
+    # Suelo de grosor, en fraccion del alto del lienzo. Por debajo de la
+    # resolucion de impresion el filamento no sale fino: sale gris, o sea
+    # grosor intermedio, que en la pieza es una papilla lisa.
+    ancho_minimo: float = 0.0
 
     # Acabado
     nervios: bool = True
@@ -93,8 +107,34 @@ STYLES: dict[str, Style] = {
         nervios=True,
     ),
     # Laminas afiladas que se cruzan, con pinchos largos por encima.
-    "tribal": Style(
-        nombre="tribal",
+    # Logo de black metal: nucleo enmaranado y filamentos radiando hacia fuera.
+    "blackmetal": Style(
+        nombre="blackmetal",
+        forma="astilla",
+        afilado=3.6,  # aguja pura
+        panza=0.30,
+        rizo=1.5,
+        enroscado=1.5,
+        # Cuatro niveles con dos hijas dan mas variedad que tres con tres, y
+        # menos tinta: la ramificacion crece como hijas^niveles, y cada
+        # filamento tiene un ancho minimo imprimible que no se puede bajar.
+        semillas=6,
+        niveles=4,
+        hijas=2,
+        merma=0.66,
+        merma_ancho=0.58,
+        # 0.7% del alto de la banda son ~0.9 mm en una esfera de 120: dos
+        # lineas de boquilla, el filamento mas fino que se puede imprimir.
+        ancho_minimo=0.007,
+        apertura_hija=0.30,  # ~17 grados: casi paralelas al padre
+        dorso=1.0,
+        nervios=False,
+        canto=0.0,  # a este grosor un contorno se comeria el filamento
+        desenfoque=0.0030,
+    ),
+    # El anterior "tribal": lo que salio fue una fronda, y como fronda esta bien.
+    "fern": Style(
+        nombre="fern",
         forma="llama",
         afilado=3.2,  # bordes hundidos y punta de aguja
         panza=0.40,  # tambien afila por la base: pua, no cuchara
@@ -210,8 +250,9 @@ def _pieza(
     dibujo.polygon(
         [(float(x), float(y)) for x, y in contorno],
         fill=TINTA,
-        outline=CANTO,
-        width=canto,
+        # En piezas muy finas el contorno se comeria la pieza entera.
+        outline=CANTO if canto > 0 else None,
+        width=max(canto, 0),
     )
     return borde_i
 
@@ -381,6 +422,119 @@ def _llama(
     _pieza(dibujo, espina, w, w * estilo.dorso, canto)
 
 
+def _fraccion_aurea(k: int) -> float:
+    """Secuencia repartida en [0, 1) sin repetirse ni agruparse.
+
+    Sirve para variar posiciones y angulos sin usar random: el dibujo sigue
+    siendo el mismo en cada ejecucion, pero pierde la regularidad que delata
+    que lo ha generado una maquina. Con las ramas equiespaciadas sale un
+    helecho; desiguales, una maraña.
+    """
+    return (k * 0.6180339887498949) % 1.0
+
+
+def _astilla(
+    dibujo: ImageDraw.ImageDraw,
+    base,
+    angulo: float,
+    largo: float,
+    ancho: float,
+    estilo: Style,
+    canto: int,
+    nivel: int,
+    suelo: float,
+    semilla: int = 0,
+) -> None:
+    """Filamento con puas hijas que brotan casi paralelas y ramifican.
+
+    Lo que separa esto de un helecho es el angulo: una fronda echa las hojas a
+    unos 60 grados del raquis y todas del mismo tamano. Aqui brotan a 15-20 y
+    con longitudes muy dispares, y por eso el conjunto se lee como una maraña
+    barrida hacia fuera en vez de como una planta.
+    """
+    pasos = 32
+    espina = _curva(
+        base, angulo, largo, giro=estilo.rizo * (0.4 + 0.5 * _fraccion_aurea(semilla)),
+        pasos=pasos, enroscado=estilo.enroscado,
+    )
+    t = np.linspace(0.0, 1.0, pasos)
+    w = t**estilo.panza * (1.0 - t) ** estilo.afilado
+    w = ancho * w / w.max()
+    # El suelo se aplica salvo en el ultimo tramo, para que la punta siga
+    # cerrando en aguja en vez de acabar cortada a escuadra.
+    w = np.maximum(w, suelo * np.minimum(1.0, 6.0 * (1.0 - t)))
+    _pieza(dibujo, espina, w, w, canto)
+
+    if nivel <= 0:
+        return
+    for k in range(estilo.hijas):
+        mezcla = _fraccion_aurea(semilla * 3 + k + 1)
+        i = int((0.12 + 0.62 * mezcla) * (pasos - 1))
+        signo = 1 if (k + semilla) % 2 == 0 else -1
+        _astilla(
+            dibujo,
+            espina[i],
+            _direccion(espina, i) + signo * estilo.apertura_hija * (0.6 + 1.1 * mezcla),
+            largo * estilo.merma * (0.7 + 0.7 * mezcla),
+            ancho * estilo.merma_ancho,
+            estilo,
+            canto,
+            nivel - 1,
+            suelo,
+            semilla=semilla * 7 + k + 1,
+        )
+
+
+def _marana(
+    dibujo: ImageDraw.ImageDraw,
+    ancho_lienzo: int,
+    alto_lienzo: int,
+    estilo: Style,
+    canto: int,
+) -> None:
+    """Nucleo enmaranado del que salen filamentos radiando hacia fuera."""
+    medio = alto_lienzo * 0.5
+    cuantas = estilo.semillas
+    suelo = alto_lienzo * estilo.ancho_minimo
+
+    # El nucleo: trazos que se cruzan a media altura y hacen de masa central.
+    for k in range(cuantas):
+        f = (k + 0.5) / cuantas
+        _astilla(
+            dibujo,
+            (ancho_lienzo * f, medio + alto_lienzo * 0.10 * (_fraccion_aurea(k) - 0.5)),
+            (0.35 if k % 2 else -0.35) + 0.6 * (_fraccion_aurea(k * 5) - 0.5),
+            ancho_lienzo * 0.24,
+            alto_lienzo * 0.013,
+            estilo,
+            canto,
+            nivel=estilo.niveles,
+            suelo=suelo,
+            semilla=k,
+        )
+
+    # Y los filamentos que salen disparados arriba y abajo, que son los que dan
+    # la silueta deshilachada.
+    for k in range(cuantas * 2):
+        f = (k + 0.5) / (cuantas * 2)
+        arriba = k % 2 == 0
+        # Casi verticales en el centro y tumbados en los extremos: asi la
+        # silueta se abre en alas en vez de quedar como un cepillo.
+        inclinacion = (f - 0.5) * 2.2
+        _astilla(
+            dibujo,
+            (ancho_lienzo * f, medio + (-1 if arriba else 1) * alto_lienzo * 0.06),
+            (-math.pi / 2 if arriba else math.pi / 2) + inclinacion,
+            alto_lienzo * (0.32 + 0.30 * _fraccion_aurea(k * 3)),
+            alto_lienzo * 0.010,
+            estilo,
+            canto,
+            nivel=estilo.niveles,
+            suelo=suelo,
+            semilla=k * 11 + 3,
+        )
+
+
 def _haz(
     dibujo: ImageDraw.ImageDraw,
     centro,
@@ -430,7 +584,17 @@ def ornament_field(size: tuple[int, int], estilo: Style | str = POR_DEFECTO) -> 
     lienzo = Image.new("L", (media * SUPERMUESTREO, alto_px * SUPERMUESTREO), FONDO)
     dibujo = ImageDraw.Draw(lienzo)
     w, h = lienzo.size
-    canto = max(1, int(h * estilo.canto))
+    canto = int(h * estilo.canto) if estilo.canto > 0 else 0
+
+    if estilo.forma == "astilla":
+        _marana(dibujo, w, h, estilo, canto)
+        lienzo = lienzo.resize((media, alto_px), Image.LANCZOS)
+        completo = Image.new("L", size, FONDO)
+        completo.paste(lienzo, (media, 0))
+        completo.paste(lienzo.transpose(Image.FLIP_LEFT_RIGHT), (0, 0))
+        return completo.filter(
+            ImageFilter.GaussianBlur(max(0.6, alto_px * estilo.desenfoque))
+        )
 
     for i, (x, y, angulo, escala) in enumerate(estilo.ramos):
         lado = 1 if i % 2 == 0 else -1
