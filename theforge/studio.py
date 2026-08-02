@@ -21,6 +21,7 @@ import io
 import json
 import mimetypes
 import threading
+import urllib.parse
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +39,17 @@ WEB = Path(__file__).parent / "studio_web"
 CUERPO_MAXIMO = 64 * 1024 * 1024  # 64 MB: una foto grande cabe, un disparate no
 DENSIDAD_PLA = 1.24  # g/cm3
 EXTENSIONES_IMAGEN = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"})
+
+# En Windows mimetypes lee del registro, y ahi .js suele estar como text/plain.
+# Un modulo ES servido como text/plain lo rechaza el navegador, asi que estos
+# tipos se fijan aqui en vez de fiarse del sistema.
+TIPOS = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+}
 
 
 class ErrorPeticion(Exception):
@@ -305,6 +317,16 @@ class Manejador(BaseHTTPRequestHandler):
                 return self._json(api_estilos())
             if ruta == "/api/imagenes":
                 return self._json(api_imagenes(self.config.raiz))
+            if ruta == "/api/imagen":
+                consulta = urllib.parse.parse_qs(
+                    self.path.split("?", 1)[1] if "?" in self.path else ""
+                )
+                relativa = (consulta.get("path") or [""])[0]
+                fichero = ruta_segura(self.config.raiz, relativa)
+                if not fichero.is_file():
+                    return self._error("no encontrado", HTTPStatus.NOT_FOUND)
+                tipo = mimetypes.guess_type(fichero.name)[0] or "application/octet-stream"
+                return self._responder(fichero.read_bytes(), tipo)
             if ruta.startswith("/api/"):
                 return self._error("endpoint desconocido", HTTPStatus.NOT_FOUND)
             return self._estatico(ruta)
@@ -356,7 +378,10 @@ class Manejador(BaseHTTPRequestHandler):
             return self._error("no encontrado", HTTPStatus.NOT_FOUND)
         if not fichero.is_file():
             return self._error("no encontrado", HTTPStatus.NOT_FOUND)
-        tipo = mimetypes.guess_type(fichero.name)[0] or "application/octet-stream"
+        tipo = TIPOS.get(
+            fichero.suffix.lower(),
+            mimetypes.guess_type(fichero.name)[0] or "application/octet-stream",
+        )
         self._responder(fichero.read_bytes(), tipo)
 
 

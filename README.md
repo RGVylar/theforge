@@ -246,6 +246,12 @@ importes.
 | `POST /api/info` | medidas, % de relieve y avisos de impresión |
 | `POST /api/stl` | proyecto → STL binario, **409 si la malla no es cerrada** |
 | `POST /api/subir` | guarda una imagen en la carpeta raíz |
+| `GET /api/imagen?path=` | sirve una imagen del proyecto (miniaturas y proporciones) |
+
+En el editor: arrastras las fotos sobre la banda, rueda para escalar, `Supr`
+para borrar, y la lista de la derecha permite reordenarlas (la última se pinta
+encima). Tres pestañas: **Banda**, **Encendida** y **3D** orbitable. Guardar y
+cargar producen el mismo JSON que entiende `forge compose`.
 
 Decisiones que sostienen el diseño:
 
@@ -261,11 +267,23 @@ Decisiones que sostienen el diseño:
   comprobar la malla es donde se construye. Si `check_mesh` no la da cerrada,
   devuelve 409 y no hay fichero.
 
-Un detalle que sorprende al usarlo: la pestaña **Banda** sale al ancho del
-raster (1400 px por defecto) y la de **Encendida** al ancho de `samples`, que
-es la resolución real del mapa de grosores. No es un fallo — la vista encendida
-enseña el detalle que de verdad va a tener la pieza, y si se ve pixelada es que
-te falta `samples`.
+Dos detalles que sorprenden al usarlo y no son fallos:
+
+- La pestaña **Banda** sale al ancho del raster (1400 px por defecto) y la de
+  **Encendida** al ancho de `samples`, que es la resolución real del mapa de
+  grosores. La vista encendida enseña el detalle que de verdad va a tener la
+  pieza: si se ve pixelada, es que te falta `samples`.
+- La vista **3D** recorta `samples` a 320 para orbitar con fluidez (~140k
+  triángulos en vez de millones). Lo que exportas usa el valor que hayas puesto.
+
+#### El visor 3D no usa librerías
+
+Estaba previsto vendorizar `three.js`, pero un visor de STL necesita muy poco:
+parsear el binario, una cámara con órbita y un shader difuso. Son ~250 líneas en
+[visor3d.js](theforge/studio_web/visor3d.js) y el repo sigue sin una sola
+dependencia de terceros. El sombreado es **facetado a propósito** —usa la normal
+que ya trae cada triángulo del STL— porque para revisar una pieza interesa ver
+las facetas del muestreo, no disimularlas.
 
 ### Ajustar un estilo
 
@@ -406,16 +424,10 @@ Nada de esto está implementado todavía.
 - **`gridfinity.py`** — organizadores de cajón paramétricos, reaprovechando el
   escritor de STL y el cosido de superficies de `stl.py`.
 - **`bambu.py`** — control local por MQTT en modo LAN-only, cuando tenga la A1.
-- **`forge studio`** — el editor web local. El plan acordado, por fases:
-  1. ~~Modelo de composición + `forge compose`~~ — **hecho** (`compose.py`).
-  2. ~~Servidor local con stdlib, sin estado~~ — **hecho** (`studio.py`), con
-     una página mínima que ya ejercita todos los endpoints.
-  3. El editor en el navegador: arrastrar/escalar/borrar fotos sobre la banda,
-     elegir forma y patrón, pestañas Banda | Encendida | 3D (visor orbitable
-     con un `three.js` vendorizado, ~600 KB, único código de terceros del
-     plan), exportar STL y proyecto.
-  Regla anti-bugs de todo el plan: el frontend nunca calcula geometría; la
-  banda PNG del backend es el único espacio de coordenadas.
+- **Editor web** — ~~las tres fases~~ **hecho**: `compose.py`, `studio.py` y el
+  editor de [studio_web/](theforge/studio_web/). Quedan ideas para más adelante:
+  rotación de capas, patrón por regiones en vez de fondo completo, presets con
+  nombre, y varias piezas en un mismo proyecto.
 
 ## Estructura
 

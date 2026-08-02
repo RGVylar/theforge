@@ -105,6 +105,31 @@ def test_el_proyecto_no_puede_apuntar_fuera(cliente):
 # --------------------------------------------------------------------------
 
 
+def test_los_modulos_js_se_sirven_con_su_tipo(cliente):
+    """En Windows mimetypes saca .js de text/plain, y asi el navegador rechaza
+    un modulo ES. Los tipos se fijan en el codigo, no en el registro."""
+    for ruta, esperado in (("/editor.js", "text/javascript"),
+                           ("/visor3d.js", "text/javascript"),
+                           ("/estilo.css", "text/css")):
+        estado, cabeceras, cuerpo = cliente("GET", ruta)
+        assert estado == HTTPStatus.OK, ruta
+        assert cabeceras["Content-Type"].startswith(esperado), ruta
+        assert cuerpo
+
+
+def test_servir_una_imagen_del_proyecto(cliente):
+    estado, cabeceras, cuerpo = cliente("GET", "/api/imagen?path=sub%2Fotra.png")
+    assert estado == HTTPStatus.OK
+    assert cabeceras["Content-Type"] == "image/png"
+    assert Image.open(io.BytesIO(cuerpo)).size == (40, 40)
+
+
+@pytest.mark.parametrize("ruta", ["/api/imagen?path=../fuera.png", "/api/imagen?path=",
+                                  "/api/imagen?path=no_existe.png"])
+def test_servir_imagen_rechaza_lo_que_debe(cliente, ruta):
+    assert cliente("GET", ruta)[0] in (HTTPStatus.BAD_REQUEST, HTTPStatus.NOT_FOUND)
+
+
 def test_la_pagina_se_sirve(cliente):
     estado, cabeceras, cuerpo = cliente("GET", "/")
     assert estado == HTTPStatus.OK

@@ -1,0 +1,143 @@
+:root {
+  color-scheme: dark;
+  --fondo: #14161a;
+  --panel: #1c1f25;
+  --hueco: #0e1014;
+  --borde: #2c313a;
+  --texto: #dfe3ea;
+  --suave: #8b93a1;
+  --acento: #7db3ff;
+  --peligro: #ff8b7d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  background: var(--fondo);
+  color: var(--texto);
+  font: 13px/1.5 system-ui, "Segoe UI", sans-serif;
+}
+
+.panel {
+  width: 268px;
+  flex: none;
+  background: var(--panel);
+  padding: 14px;
+  overflow-y: auto;
+}
+#ajustes { border-right: 1px solid var(--borde); }
+#capas { border-left: 1px solid var(--borde); }
+
+h1 { font-size: 15px; margin: 0 0 16px; font-weight: 600; }
+h1 span { color: var(--suave); font-weight: 400; }
+h2 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--suave); margin: 0 0 8px; font-weight: 600;
+}
+section { margin-bottom: 20px; }
+
+label {
+  display: block;
+  margin: 9px 0 3px;
+  font-size: 11px;
+  color: var(--suave);
+}
+label.check { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+label.check input { width: auto; }
+
+select, input, button {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--hueco);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: 5px;
+  font: inherit;
+}
+input[type="range"] { padding: 0; border: none; background: none; }
+input[type="file"] { padding: 4px; font-size: 11px; }
+
+button { background: #262d38; cursor: pointer; margin-top: 8px; }
+button:hover { background: #313b49; }
+button.principal { background: var(--acento); color: #0d1017; font-weight: 600; border-color: var(--acento); }
+button.peligro { color: var(--peligro); }
+
+.fila { display: flex; gap: 6px; }
+.rejilla { display: grid; grid-template-columns: 1fr 1fr; gap: 0 6px; }
+.rejilla > label { grid-column: span 2; }
+.rejilla > label.medio { grid-column: span 1; }
+
+main { flex: 1; display: flex; flex-direction: column; padding: 14px; min-width: 0; }
+
+.pestanas { display: flex; gap: 6px; margin-bottom: 12px; flex: none; }
+.pestanas button { width: auto; margin: 0; padding: 6px 14px; }
+.pestanas button[aria-selected="true"] {
+  background: var(--acento); color: #0d1017; border-color: var(--acento); font-weight: 600;
+}
+
+#lienzo {
+  position: relative;  /* el visor 3D se posiciona contra esto */
+  flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+
+#envoltorio-banda { position: relative; width: 100%; }
+#vista {
+  display: block; width: 100%;
+  border: 1px solid var(--borde); border-radius: 6px; background: var(--hueco);
+}
+#capas-overlay { position: absolute; inset: 0; }
+
+.caja {
+  position: absolute;
+  border: 1.5px dashed rgba(125, 179, 255, .75);
+  border-radius: 3px;
+  cursor: grab;
+}
+.caja[data-mask="circle"] { border-radius: 50%; }
+.caja.activa { border-style: solid; border-width: 2px; background: rgba(125, 179, 255, .10); }
+.caja.arrastrando { cursor: grabbing; }
+
+#pista { color: var(--suave); font-size: 11px; margin: 8px 0 0; }
+/* Absoluto y no un item flexible: como item, el canvas negociaba su tamano con
+   el contenedor y salia estrecho y altisimo. Asi ocupa el area entera y punto. */
+#visor {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  border: 1px solid var(--borde); border-radius: 6px;
+  display: block; touch-action: none;
+}
+#visor[hidden] { display: none; }
+
+#lista-capas { list-style: none; margin: 12px 0 0; padding: 0; }
+#lista-capas li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border: 1px solid transparent; border-radius: 5px;
+  cursor: pointer; font-size: 12px;
+}
+#lista-capas li:hover { background: #232935; }
+#lista-capas li[aria-selected="true"] { border-color: var(--acento); background: #212a38; }
+#lista-capas img { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; flex: none; }
+#lista-capas span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#estado, #avisos { margin-top: 14px; font-size: 11px; white-space: pre-wrap; }
+#estado { color: var(--suave); }
+#avisos { color: #ffcf7a; }
+
+/* En ventanas estrechas los dos paneles se comen el lienzo: con 937 px de
+   ancho quedaban 401 para la pieza. Primero adelgazan, y si aun asi no cabe,
+   se apilan y el lienzo se lleva el ancho entero. */
+@media (max-width: 1200px) {
+  .panel { width: 208px; padding: 10px; }
+}
+
+@media (max-width: 900px) {
+  body { flex-direction: column; height: auto; min-height: 100vh; }
+  .panel { width: 100%; border: none; border-bottom: 1px solid var(--borde); }
+  #capas { border-bottom: none; border-top: 1px solid var(--borde); }
+  main { order: -1; min-height: 62vh; }
+  .panel section { display: inline-block; vertical-align: top; width: 230px; margin-right: 16px; }
+}

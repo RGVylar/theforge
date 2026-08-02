@@ -4,199 +4,96 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>theforge studio</title>
-<style>
-  :root { color-scheme: dark; --fondo:#16181c; --panel:#1e2127; --borde:#2e333c;
-          --texto:#dfe3ea; --suave:#8b93a1; --acento:#7db3ff; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--fondo); color:var(--texto);
-         font:14px/1.5 system-ui, "Segoe UI", sans-serif; display:flex; height:100vh; }
-  aside { width:300px; flex:none; background:var(--panel); border-right:1px solid var(--borde);
-          padding:16px; overflow-y:auto; }
-  main { flex:1; padding:16px; overflow-y:auto; }
-  h1 { font-size:15px; margin:0 0 4px; letter-spacing:.02em; }
-  p.nota { color:var(--suave); font-size:12px; margin:0 0 16px; }
-  label { display:block; margin:10px 0 3px; font-size:12px; color:var(--suave); }
-  select, input, button { width:100%; padding:7px 9px; background:#12141a; color:var(--texto);
-          border:1px solid var(--borde); border-radius:5px; font:inherit; }
-  button { background:#28303c; cursor:pointer; margin-top:10px; }
-  button:hover { background:#33404f; }
-  button.principal { background:var(--acento); color:#0d1017; font-weight:600; border-color:var(--acento); }
-  .fila { display:flex; gap:8px; }
-  .pestanas { display:flex; gap:6px; margin-bottom:12px; }
-  .pestanas button { width:auto; margin:0; }
-  .pestanas button[aria-selected="true"] { background:var(--acento); color:#0d1017; }
-  img { max-width:100%; display:block; border:1px solid var(--borde); border-radius:6px;
-        background:#0c0e12; }
-  #estado { margin-top:12px; font-size:12px; color:var(--suave); white-space:pre-wrap; }
-  #avisos { color:#ffcf7a; font-size:12px; margin-top:8px; white-space:pre-wrap; }
-</style>
+<link rel="stylesheet" href="estilo.css">
 </head>
 <body>
-<aside>
-  <h1>theforge studio</h1>
-  <p class="nota">Fase 2: el servidor. El editor con arrastre llega en la fase 3.</p>
 
-  <label for="forma">Forma</label>
-  <select id="forma"></select>
+<aside class="panel" id="ajustes">
+  <h1>theforge <span>studio</span></h1>
 
-  <label for="patron">Fondo</label>
-  <select id="patron"></select>
+  <section>
+    <h2>Forma</h2>
+    <label for="curve">Tipo</label>
+    <select id="curve"></select>
 
-  <label for="imagen">Foto del medallón</label>
-  <select id="imagen"></select>
+    <div class="rejilla" id="campos-forma"></div>
 
-  <label for="subir">Importar imagen</label>
-  <input type="file" id="subir" accept="image/*">
-
-  <div class="fila">
-    <div style="flex:1">
-      <label for="escala">Tamaño</label>
-      <input type="range" id="escala" min="0.2" max="1.2" step="0.02" value="0.8">
+    <label for="min_thickness">Grosor mín / máx (mm)</label>
+    <div class="fila">
+      <input type="number" id="min_thickness" step="0.1" min="0.1" value="0.7">
+      <input type="number" id="max_thickness" step="0.1" min="0.2" value="3.0">
     </div>
-    <div style="flex:1">
-      <label for="cx">Posición X</label>
-      <input type="range" id="cx" min="0" max="1" step="0.01" value="0.5">
-    </div>
-  </div>
 
-  <button id="refrescar">Actualizar vista</button>
-  <button id="exportar" class="principal">Exportar STL</button>
+    <label for="frame_mm">Marco (mm)</label>
+    <input type="number" id="frame_mm" step="0.5" min="0" value="6">
+
+    <label for="samples">Muestras a lo ancho</label>
+    <input type="number" id="samples" step="50" min="20" value="300">
+  </section>
+
+  <section>
+    <h2>Fondo</h2>
+    <label for="pattern">Patrón</label>
+    <select id="pattern"></select>
+    <div id="fila-gris" hidden>
+      <label for="gray">Gris del fondo</label>
+      <input type="range" id="gray" min="0" max="255" value="205">
+    </div>
+  </section>
+
+  <section>
+    <h2>Proyecto</h2>
+    <button id="btn-guardar">Guardar proyecto</button>
+    <button id="btn-cargar">Cargar proyecto</button>
+    <input type="file" id="fichero-proyecto" accept=".json" hidden>
+    <button id="btn-exportar" class="principal">Exportar STL</button>
+  </section>
 
   <div id="estado"></div>
   <div id="avisos"></div>
 </aside>
 
 <main>
-  <div class="pestanas">
+  <div class="pestanas" role="tablist">
     <button data-vista="banda" aria-selected="true">Banda</button>
     <button data-vista="encendida" aria-selected="false">Encendida</button>
+    <button data-vista="modelo" aria-selected="false">3D</button>
   </div>
-  <img id="vista" alt="previsualización">
+
+  <div id="lienzo">
+    <div id="envoltorio-banda">
+      <img id="vista" alt="previsualización de la banda">
+      <div id="capas-overlay"></div>
+      <p id="pista">Arrastra una foto para moverla · rueda para escalar · Supr para borrarla</p>
+    </div>
+    <canvas id="visor" hidden></canvas>
+  </div>
 </main>
 
-<script>
-const $ = (id) => document.getElementById(id);
-let vistaActual = "banda";
+<aside class="panel" id="capas">
+  <h2>Capas</h2>
+  <label for="anadir">Añadir foto</label>
+  <select id="anadir"></select>
+  <label for="subir">Importar del disco</label>
+  <input type="file" id="subir" accept="image/*">
+  <ol id="lista-capas"></ol>
+  <div id="detalle-capa" hidden>
+    <h2>Capa seleccionada</h2>
+    <label for="capa-scale">Tamaño</label>
+    <input type="range" id="capa-scale" min="0.05" max="1.4" step="0.01">
+    <label for="capa-gamma">Gamma</label>
+    <input type="range" id="capa-gamma" min="0.4" max="2.2" step="0.05">
+    <label for="capa-mask">Máscara</label>
+    <select id="capa-mask"></select>
+    <label class="check"><input type="checkbox" id="capa-ring"> Aro alrededor</label>
+    <div class="fila">
+      <button id="capa-subir">Subir</button>
+      <button id="capa-bajar">Bajar</button>
+    </div>
+    <button id="capa-borrar" class="peligro">Borrar capa</button>
+  </div>
+</aside>
 
-function proyecto() {
-  const forma = $("forma").value;
-  const shape = {
-    curve: forma, min_thickness: 0.7, max_thickness: 3.0, frame_mm: 6, samples: 300,
-  };
-  if (forma === "sphere") {
-    Object.assign(shape, { diameter_mm: 120, lat_min_deg: -45, lat_max_deg: 75 });
-  } else {
-    Object.assign(shape, { width_mm: 120, height_mm: 90 });
-    if (forma === "cylindrical") shape.arc_degrees = 360;
-  }
-  const capas = [];
-  if ($("imagen").value) {
-    capas.push({
-      type: "photo", path: $("imagen").value,
-      cx: parseFloat($("cx").value), cy: 0.5,
-      scale: parseFloat($("escala").value), mask: "circle", ring: true, gamma: 1.0,
-    });
-  }
-  const patron = $("patron").value;
-  return {
-    version: 1, shape,
-    background: patron ? { pattern: patron } : { gray: 205 },
-    layers: capas,
-  };
-}
-
-async function pedir(ruta, cuerpo) {
-  const r = await fetch(ruta, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(cuerpo),
-  });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-  return r;
-}
-
-async function refrescar() {
-  $("estado").textContent = "generando…";
-  $("avisos").textContent = "";
-  try {
-    const p = proyecto();
-    const r = await pedir("/api/" + vistaActual, p);
-    const blob = await r.blob();
-    const anterior = $("vista").src;
-    $("vista").src = URL.createObjectURL(blob);
-    if (anterior.startsWith("blob:")) URL.revokeObjectURL(anterior);
-
-    const info = await (await pedir("/api/info", p)).json();
-    $("estado").textContent =
-      `${info.superficie_mm.ancho} × ${info.superficie_mm.alto} mm  ·  ` +
-      `${Math.round(info.relieve * 100)}% con relieve` +
-      (info.esfera ? `\nbocas: ${info.esfera.boca_abajo_mm} / ${info.esfera.boca_arriba_mm} mm` +
-                     `  ·  voladizo ${info.esfera.voladizo_grados}°` : "");
-    $("avisos").textContent = (info.avisos || []).join("\n");
-  } catch (err) {
-    $("estado").textContent = "error: " + err.message;
-  }
-}
-
-async function exportar() {
-  $("estado").textContent = "construyendo la malla…";
-  try {
-    const r = await pedir("/api/stl", proyecto());
-    const url = URL.createObjectURL(await r.blob());
-    const a = Object.assign(document.createElement("a"), { href: url, download: "pieza.stl" });
-    a.click();
-    URL.revokeObjectURL(url);
-    $("estado").textContent = "STL descargado";
-  } catch (err) {
-    $("estado").textContent = "no exportado: " + err.message;
-  }
-}
-
-async function cargarImagenes(seleccionar) {
-  const { imagenes } = await (await fetch("/api/imagenes")).json();
-  $("imagen").innerHTML = '<option value="">(ninguna)</option>' +
-    imagenes.map((n) => `<option${n === seleccionar ? " selected" : ""}>${n}</option>`).join("");
-}
-
-async function inicio() {
-  const est = await (await fetch("/api/estilos")).json();
-  $("forma").innerHTML = est.formas.map((f) =>
-    `<option value="${f}"${f === "sphere" ? " selected" : ""}>${f}</option>`).join("");
-  $("patron").innerHTML = '<option value="">(gris liso)</option>' +
-    est.patrones.map((p) => `<option>${p}</option>`).join("");
-  await cargarImagenes();
-  refrescar();
-}
-
-$("refrescar").onclick = refrescar;
-$("exportar").onclick = exportar;
-for (const s of ["forma", "patron", "imagen"]) $(s).onchange = refrescar;
-for (const s of ["escala", "cx"]) $(s).onchange = refrescar;
-
-$("subir").onchange = async (ev) => {
-  const fichero = ev.target.files[0];
-  if (!fichero) return;
-  $("estado").textContent = "subiendo…";
-  const r = await fetch("/api/subir", {
-    method: "POST",
-    headers: { "X-Nombre-Fichero": fichero.name },
-    body: fichero,
-  });
-  const datos = await r.json();
-  if (!r.ok) { $("estado").textContent = "error: " + datos.error; return; }
-  await cargarImagenes(datos.path);
-  refrescar();
-};
-
-document.querySelectorAll(".pestanas button").forEach((b) => {
-  b.onclick = () => {
-    vistaActual = b.dataset.vista;
-    document.querySelectorAll(".pestanas button").forEach((o) =>
-      o.setAttribute("aria-selected", String(o === b)));
-    refrescar();
-  };
-});
-
-inicio();
-</script>
+<script type="module" src="editor.js"></script>
 </body>
 </html>
