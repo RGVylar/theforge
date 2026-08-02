@@ -286,6 +286,58 @@ def cmd_ornament(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_compose_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "compose",
+        help="genera el STL de un proyecto de composicion (JSON)",
+        description="Proyecto JSON (forma + fondo + fotos colocadas) -> STL cerrado. "
+        "Es el mismo motor que usara el editor: el JSON es el documento.",
+    )
+    p.add_argument("project", type=Path, help="fichero .json del proyecto")
+    p.add_argument("-o", "--output", type=Path, help="STL de salida (por defecto, junto al JSON)")
+    p.add_argument("--band", type=Path, help="guardar tambien la banda compuesta como PNG")
+    p.add_argument(
+        "--width-px", type=int, default=3600, help="ancho del raster de la banda (3600)"
+    )
+    p.add_argument("--no-check", action="store_true", help="no comprobar la malla")
+    p.set_defaults(func=cmd_compose)
+
+
+def cmd_compose(args: argparse.Namespace) -> int:
+    from theforge.compose import build_mesh, load_project, render_band
+
+    comp = load_project(args.project)
+    salida = args.output or args.project.with_suffix(".stl")
+
+    banda = render_band(comp, width_px=args.width_px)
+    if args.band:
+        args.band.parent.mkdir(parents=True, exist_ok=True)
+        banda.save(args.band)
+
+    inicio = time.perf_counter()
+    malla = lithophane(banda, comp.params)
+    write_binary_stl(salida, malla, header=f"theforge compose {args.project.name}")
+    tardanza = time.perf_counter() - inicio
+
+    fondo = comp.pattern or f"gris {comp.gray}"
+    print(f"proyecto  {args.project} ({len(comp.layers)} fotos, fondo {fondo})")
+    _describe_shape(comp.params, layout(banda, comp.params))
+    print(f"banda     {banda.width}x{banda.height} px")
+    print(f"malla     {len(malla)} triangulos en {tardanza:.1f} s")
+
+    if not args.no_check:
+        informe = check_mesh(malla)
+        print(f"chequeo   {informe}")
+        print(f"material  ~{informe.volume_mm3 / 1000.0 * DENSIDAD_PLA:.1f} g de PLA al 100% de relleno")
+        if not informe.watertight:
+            print("ERROR: la malla no es cerrada, no la imprimas", file=sys.stderr)
+            return 1
+    if args.band:
+        print(f"banda ->  {args.band}")
+    print(f"salida    {salida}")
+    return 0
+
+
 def _add_tune_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "tune",
@@ -319,6 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="comando", required=True)
     _add_lito_parser(sub)
     _add_ornament_parser(sub)
+    _add_compose_parser(sub)
     _add_tune_parser(sub)
     return parser
 

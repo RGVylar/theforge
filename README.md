@@ -14,6 +14,7 @@ Sin CAD pesado: la geometría se escribe a mano como STL binario con numpy. Las
 | `stl.py` | escritura/lectura de STL binario, cosido de superficies, comprobación de malla cerrada |
 | `lito.py` | generador de litofanías (plana, cilíndrica y esférica) |
 | `ornament.py` | ornamento procedural y composición de bandas con medallón |
+| `compose.py` | proyectos de composición: JSON con forma + fondo + fotos colocadas |
 | `tuner.py` | ajuste interactivo de estilos con sliders (tkinter) |
 | `cli.py` | `forge lito ...`, `forge ornament ...`, `forge tune` |
 | resto del roadmap | sin empezar |
@@ -187,6 +188,43 @@ Para elegir sin generar un solo STL, la hoja de pruebas:
 python -m theforge ornament retrato.jpg --sheet
 ```
 
+### Proyectos de composición
+
+El paso previo al editor visual: un JSON describe la pieza entera — forma,
+fondo (patrón o gris) y fotos colocadas con posición, tamaño, máscara y gamma
+propios. `forge compose` lo convierte en STL:
+
+```bash
+python -m theforge compose proyecto.json -o lampara.stl --band banda.png
+```
+
+```json
+{
+  "version": 1,
+  "shape": {"curve": "sphere", "diameter_mm": 120, "min_thickness": 0.7,
+            "max_thickness": 3.0, "frame_mm": 6, "samples": 720,
+            "lat_min_deg": -45.0, "lat_max_deg": 75.0},
+  "background": {"pattern": "acanthus"},
+  "layers": [
+    {"type": "photo", "path": "retrato.png", "cx": 0.5, "cy": 0.5,
+     "scale": 0.8, "mask": "circle", "ring": true, "gamma": 1.0}
+  ]
+}
+```
+
+Reglas del documento: `cx`/`cy` en fracciones de banda (fila 0 arriba),
+`scale` = fracción del alto, la última capa pinta encima, las rutas se
+resuelven relativas al JSON, y una clave desconocida es un **error**, no un
+aviso — un typo silencioso sería un STL mal generado. En la esfera cada foto
+se pre-deforma alrededor de su propio centro, y en las superficies cerradas
+una capa que cruza la costura reaparece por el otro lado.
+
+Ejemplo completo en [examples/compose_demo.py](examples/compose_demo.py).
+
+Este JSON es el documento del futuro editor web (`forge studio`, en el
+roadmap): el editor solo manipulará este fichero y la banda de píxeles que
+devuelve el backend, nunca recalculará geometría por su cuenta.
+
 ### Ajustar un estilo
 
 ```bash
@@ -326,10 +364,18 @@ Nada de esto está implementado todavía.
 - **`gridfinity.py`** — organizadores de cajón paramétricos, reaprovechando el
   escritor de STL y el cosido de superficies de `stl.py`.
 - **`bambu.py`** — control local por MQTT en modo LAN-only, cuando tenga la A1.
-- **Interfaz web** — la ventana de tkinter cubre el ajuste de un estilo. Si en
-  algún momento hace falta algo mayor (comparar variantes en rejilla, guardar
-  presets, previsualizar la esfera en 3D), la puerta queda abierta. No está
-  cerrado, solo aplazado hasta que el uso lo pida.
+- **`forge studio`** — el editor web local. El plan acordado, por fases:
+  1. ~~Modelo de composición + `forge compose`~~ — **hecho** (`compose.py`).
+  2. Servidor local con stdlib (sin Flask): `POST /api/banda` (PNG),
+     `POST /api/encendida` (simulación a contraluz) y `POST /api/stl` (que se
+     niega a exportar si la malla no es cerrada). Sin estado: el JSON del
+     proyecto viaja en cada petición.
+  3. El editor en el navegador: arrastrar/escalar/borrar fotos sobre la banda,
+     elegir forma y patrón, pestañas Banda | Encendida | 3D (visor orbitable
+     con un `three.js` vendorizado, ~600 KB, único código de terceros del
+     plan), exportar STL y proyecto.
+  Regla anti-bugs de todo el plan: el frontend nunca calcula geometría; la
+  banda PNG del backend es el único espacio de coordenadas.
 
 ## Estructura
 
