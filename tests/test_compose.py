@@ -188,6 +188,88 @@ def test_en_la_esfera_la_foto_se_predeforma_alrededor_de_su_centro(tmp_path):
     assert arriba > abajo * 1.05
 
 
+def franja_vertical(tmp_path, nombre="franja.png"):
+    pixeles = np.full((80, 80), 255, dtype=np.uint8)
+    pixeles[:, 36:44] = 0
+    Image.fromarray(pixeles, "L").save(tmp_path / nombre)
+    return nombre
+
+
+def anchos_de_franja(banda, alto_rel):
+    franja = banda < 30
+    filas = np.flatnonzero(franja.any(axis=1))
+    alto = filas[-1] - filas[0]
+    return franja[filas[0] + int(alto * alto_rel)].sum()
+
+
+def test_prewarp_apagado_deja_la_foto_sin_tocar(tmp_path):
+    """Para una fuente que YA viene equirectangular: deformarla otra vez la
+    deformaria dos veces."""
+    franja_vertical(tmp_path)
+    con = esfera(tmp_path, path="franja.png", cy=0.3, scale=0.45, mask="rect")
+    sin = esfera(tmp_path, path="franja.png", cy=0.3, scale=0.45, mask="rect",
+                 prewarp=False)
+
+    b_con = np.asarray(render_band(con, width_px=ANCHO_PX), dtype=int)
+    b_sin = np.asarray(render_band(sin, width_px=ANCHO_PX), dtype=int)
+
+    # Con pre-deformacion la franja se ensancha hacia arriba; sin ella, no.
+    assert anchos_de_franja(b_con, 0.15) > anchos_de_franja(b_con, 0.85) * 1.05
+    assert anchos_de_franja(b_sin, 0.15) == pytest.approx(
+        anchos_de_franja(b_sin, 0.85), rel=0.02
+    )
+
+
+def test_prewarp_no_pinta_nada_en_la_plana(tmp_path):
+    """Un plano no deforma: el interruptor no debe cambiar nada."""
+    franja_vertical(tmp_path)
+    con = plana(tmp_path, path="franja.png", scale=0.5, mask="rect")
+    sin = plana(tmp_path, path="franja.png", scale=0.5, mask="rect", prewarp=False)
+    assert np.array_equal(
+        np.asarray(render_band(con, width_px=ANCHO_PX)),
+        np.asarray(render_band(sin, width_px=ANCHO_PX)),
+    )
+
+
+def test_el_fit_de_la_esfera_viaja_en_el_proyecto(tmp_path):
+    comp = esfera(tmp_path)
+    comp.params.fit = "conformal"
+    recargado = load_project(save_project(comp, tmp_path / "p.json"))
+    assert recargado.params.fit == "conformal"
+
+
+def test_conformal_cambia_la_malla_pero_no_el_raster(tmp_path):
+    """fit reparte las latitudes al envolver, no dibuja la banda.
+
+    Por eso el raster sale identico y la pieza no: el corte superior real lo
+    deriva el reparto conforme de la proporcion de la banda, e ignora
+    lat_max_deg. Es la trampa que hacia que /api/info diera una boca falsa.
+    """
+    from theforge.lito import layout
+
+    recto = esfera(tmp_path)
+    conforme = esfera(tmp_path)
+    conforme.params.fit = "conformal"
+
+    banda_recto = render_band(recto, width_px=ANCHO_PX)
+    banda_conforme = render_band(conforme, width_px=ANCHO_PX)
+    assert np.array_equal(np.asarray(banda_recto), np.asarray(banda_conforme))
+
+    _, arriba_recto = layout(banda_recto, recto.params).lat_degrees
+    _, arriba_conforme = layout(banda_conforme, conforme.params).lat_degrees
+    assert arriba_recto == pytest.approx(75.0)  # el que se pidio
+    assert arriba_conforme < 70.0  # el derivado, que es el que se imprime
+
+    assert check_mesh(build_mesh(conforme, width_px=ANCHO_PX)).watertight
+
+
+def test_fit_invalido(tmp_path):
+    comp = esfera(tmp_path)
+    comp.params.fit = "mercator"
+    with pytest.raises(ValueError):
+        comp.validate()
+
+
 def test_gamma_por_capa(tmp_path):
     gris = tmp_path / "gris.png"
     Image.new("L", (40, 40), 128).save(gris)
@@ -197,6 +279,76 @@ def test_gamma_por_capa(tmp_path):
     b_oscura = np.asarray(render_band(oscura, width_px=ANCHO_PX), dtype=int)
     centro = (b_clara.shape[0] // 2, b_clara.shape[1] // 2)
     assert b_clara[centro] > 128 > b_oscura[centro]
+
+
+def fondo_asimetrico(tmp_path, nombre="grabado.png"):
+    """Imagen claramente asimetrica: si se espeja, se nota."""
+    pixeles = np.full((60, 120), 220, dtype=np.uint8)
+    pixeles[:, :20] = 20  # una franja negra pegada al borde izquierdo
+    Image.fromarray(pixeles, "L").save(tmp_path / nombre)
+    return nombre
+
+
+def test_fondo_desde_imagen_propia(tmp_path):
+    comp = plana(tmp_path, scale=0.1)
+    comp.image = fondo_asimetrico(tmp_path)
+    comp.mirror = False
+    banda = np.asarray(render_band(comp, width_px=ANCHO_PX), dtype=int)
+    assert banda[5, 5] < 60  # la franja oscura, a la izquierda
+    assert banda[5, -5] > 180  # y el resto claro
+
+
+def test_el_fondo_espejado_empalma_al_cerrar(tmp_path):
+    """Una imagen cualquiera no tesela; espejada, sus bordes coinciden."""
+    comp = esfera(tmp_path, scale=0.1)
+    comp.image = fondo_asimetrico(tmp_path)
+    comp.mirror = True
+    banda = np.asarray(render_band(comp, width_px=ANCHO_PX), dtype=int)
+    # La columna 0 y la ultima son el mismo meridiano de la esfera.
+    assert np.abs(banda[:, 0].astype(int) - banda[:, -1]).max() < 25
+
+
+def test_sin_espejar_la_costura_se_nota(tmp_path):
+    comp = esfera(tmp_path, scale=0.1)
+    comp.image = fondo_asimetrico(tmp_path)
+    comp.mirror = False
+    banda = np.asarray(render_band(comp, width_px=ANCHO_PX), dtype=int)
+    assert np.abs(banda[:, 0].astype(int) - banda[:, -1]).max() > 100
+
+
+def test_repetir_el_fondo(tmp_path):
+    comp = plana(tmp_path, scale=0.1)
+    comp.image = fondo_asimetrico(tmp_path)
+    comp.mirror = False
+    comp.tile = 3
+    banda = np.asarray(render_band(comp, width_px=ANCHO_PX), dtype=int)
+    # Tres franjas oscuras en vez de una: se cuentan los saltos a oscuro.
+    fila = banda[5] < 60
+    saltos = int(np.count_nonzero(fila[1:] & ~fila[:-1])) + int(fila[0])
+    assert saltos == 3
+
+
+def test_fondo_y_patron_son_excluyentes(tmp_path):
+    datos = to_dict(plana(tmp_path))
+    datos["background"] = {"pattern": "fern", "image": "x.png"}
+    with pytest.raises(ValueError, match="excluyentes"):
+        from_dict(datos, base_dir=tmp_path)
+
+
+def test_fondo_con_imagen_que_no_existe(tmp_path):
+    comp = plana(tmp_path)
+    comp.image = "no_existe.png"
+    with pytest.raises(ValueError, match="fondo"):
+        comp.validate()
+
+
+def test_ida_y_vuelta_con_fondo_de_imagen(tmp_path):
+    comp = plana(tmp_path)
+    comp.image = fondo_asimetrico(tmp_path)
+    comp.tile = 2
+    comp.mirror = False
+    recargado = load_project(save_project(comp, tmp_path / "p.json"))
+    assert (recargado.image, recargado.tile, recargado.mirror) == (comp.image, 2, False)
 
 
 def test_fondo_gris_configurable(tmp_path):

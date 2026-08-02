@@ -176,6 +176,21 @@ def test_info_trae_medidas_y_avisos(cliente):
     assert info["avisos"] == []  # -45 y con marco: nada que avisar
 
 
+def test_info_reporta_la_latitud_real_no_la_pedida(cliente):
+    """Con fit=conformal el corte superior lo deriva el reparto, e ignora
+    lat_max_deg. Reportar el parametro daria un diametro de boca falso."""
+    proyecto = proyecto_esfera()
+    _, _, recto = cliente("POST", "/api/info", proyecto)
+    proyecto["shape"]["fit"] = "conformal"
+    _, _, conforme = cliente("POST", "/api/info", proyecto)
+
+    a = json.loads(recto)["esfera"]
+    b = json.loads(conforme)["esfera"]
+    assert a["lat_max_grados"] == pytest.approx(75.0)
+    assert b["lat_max_grados"] < 70.0
+    assert b["boca_arriba_mm"] > a["boca_arriba_mm"]  # corta mas abajo = boca mayor
+
+
 def test_info_avisa_de_lo_que_no_se_va_a_imprimir_bien(cliente):
     proyecto = proyecto_esfera()
     proyecto["shape"]["lat_min_deg"] = -70.0

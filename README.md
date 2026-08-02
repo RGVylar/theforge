@@ -209,10 +209,35 @@ python -m theforge compose proyecto.json -o lampara.stl --band banda.png
   "background": {"pattern": "acanthus"},
   "layers": [
     {"type": "photo", "path": "retrato.png", "cx": 0.5, "cy": 0.5,
-     "scale": 0.8, "mask": "circle", "ring": true, "gamma": 1.0}
+     "scale": 0.8, "mask": "circle", "ring": true, "gamma": 1.0, "prewarp": true}
   ]
 }
 ```
+
+**El fondo** admite tres orígenes, excluyentes entre sí:
+
+| | Qué es |
+| --- | --- |
+| `{"pattern": "acanthus"}` | uno de los patrones procedurales |
+| `{"image": "grabado.png", "tile": 2, "mirror": true}` | una imagen tuya |
+| `{"gray": 205}` | gris liso |
+
+`mirror` repite cada copia seguida de su reflejo. Es lo que hace que **una
+imagen cualquiera empalme al cerrar la pieza** sin exigir que sea teselable: el
+borde derecho de una copia es idéntico al izquierdo de la siguiente, y el
+último con el primero. Apágalo solo en piezas planas.
+
+**`prewarp`** (por capa, solo afecta a la esfera) ensancha cada fila de la foto
+por `1/cos(latitud)` para compensar lo que la esfera la va a comprimir. Va
+encendido por defecto, y es lo que hace que un medallón salga circular y no
+aperado. **Apágalo si la imagen ya viene equirectangular** —una panorámica 2:1,
+o algo que hayas pre-deformado tú— o se deformará dos veces.
+
+Ojo con **`fit: "conformal"`** en la esfera: el reparto conforme deriva el corte
+superior de la proporción de la banda e **ignora `lat_max_deg`**, que ahí solo
+decide la forma del ráster. El corte real —y por tanto el diámetro de la boca de
+arriba— lo reportan `forge compose` y `/api/info`, que leen el layout y no el
+parámetro.
 
 Reglas del documento: `cx`/`cy` en fracciones de banda (fila 0 arriba),
 `scale` = fracción del alto, la última capa pinta encima, las rutas se

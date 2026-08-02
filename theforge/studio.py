@@ -98,8 +98,9 @@ def _composicion(datos: dict, raiz: Path):
         raise ErrorPeticion("se esperaba un objeto JSON con el proyecto")
     try:
         comp = from_dict(datos, base_dir=raiz)
-        for capa in comp.layers:
-            ruta_segura(raiz, capa.path)  # ninguna capa puede salirse de la raiz
+        # Ni las capas ni el fondo pueden apuntar fuera de la carpeta raiz.
+        for ruta in [c.path for c in comp.layers] + ([comp.image] if comp.image else []):
+            ruta_segura(raiz, ruta)
         comp.validate()
     except ErrorPeticion:
         raise
@@ -169,16 +170,24 @@ def api_info(datos: dict, raiz: Path, ancho_px: int) -> dict:
     if p.curve == SPHERE:
         import math
 
+        from theforge.lito import layout
+
+        # Las latitudes reales salen del layout, no de los parametros: con
+        # fit=conformal el corte superior lo deriva la proporcion de la banda y
+        # lat_max_deg se ignora. Leer el parametro daria una boca falsa.
+        lat_min, lat_max = layout(banda, p).lat_degrees
         radio = p.radius_mm
         info["esfera"] = {
             "diametro_mm": p.diameter_mm,
-            "boca_abajo_mm": round(2 * radio * math.cos(math.radians(p.lat_min_deg)), 1),
-            "boca_arriba_mm": round(2 * radio * math.cos(math.radians(p.lat_max_deg)), 1),
-            "voladizo_grados": round(abs(p.lat_min_deg), 1),
+            "lat_min_grados": round(lat_min, 1),
+            "lat_max_grados": round(lat_max, 1),
+            "boca_abajo_mm": round(2 * radio * math.cos(math.radians(lat_min)), 1),
+            "boca_arriba_mm": round(2 * radio * math.cos(math.radians(lat_max)), 1),
+            "voladizo_grados": round(abs(lat_min), 1),
         }
-        if abs(p.lat_min_deg) > 45:
+        if abs(lat_min) > 45:
             info["avisos"].append("el voladizo pasa de 45 grados: necesitara soportes")
-        if p.lat_max_deg > 80:
+        if lat_max > 80:
             info["avisos"].append("el corte superior pasa de 80 grados: tendra que puentear")
         if p.frame_mm <= 0:
             info["avisos"].append("sin marco el borde de apoyo queda ondulado")

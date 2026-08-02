@@ -24,7 +24,7 @@ const CAMPOS_FORMA = {
 const PREDETERMINADOS = {
   flat: { width_mm: 120, height_mm: 90 },
   cylindrical: { width_mm: 160, height_mm: 110, arc_degrees: 360 },
-  sphere: { diameter_mm: 120, lat_min_deg: -45, lat_max_deg: 75 },
+  sphere: { diameter_mm: 120, lat_min_deg: -45, lat_max_deg: 75, fit: "stretch" },
 };
 
 let proyecto = {
@@ -237,6 +237,10 @@ function pintarLista() {
     $("capa-gamma").value = capa.gamma;
     $("capa-mask").value = capa.mask;
     $("capa-ring").checked = capa.ring;
+    $("capa-prewarp").checked = capa.prewarp !== false;
+    // Solo la esfera deforma; un cilindro se despliega en un plano sin tocar nada.
+    $("fila-prewarp").hidden = proyecto.shape.curve !== "sphere";
+    $("fila-prewarp").nextElementSibling.hidden = proyecto.shape.curve !== "sphere";
   }
 }
 
@@ -249,7 +253,7 @@ function seleccionar(i) {
 function anadirCapa(ruta) {
   proyecto.layers.push({
     type: "photo", path: ruta, cx: 0.5, cy: 0.5,
-    scale: 0.6, mask: "circle", ring: true, gamma: 1.0,
+    scale: 0.6, mask: "circle", ring: true, gamma: 1.0, prewarp: true,
   });
   seleccionar(proyecto.layers.length - 1);
   refrescar();
@@ -300,8 +304,10 @@ function cambiarForma(curva) {
   for (const campos of Object.values(CAMPOS_FORMA)) {
     for (const [clave] of campos) delete s[clave];
   }
+  delete s.fit;
   Object.assign(s, { curve: curva }, PREDETERMINADOS[curva]);
-  pintarCamposForma();
+  sincronizarPanel();
+  pintarLista();
   refrescar();
 }
 
@@ -348,9 +354,18 @@ function sincronizarPanel() {
   for (const clave of ["min_thickness", "max_thickness", "frame_mm", "samples"]) {
     $(clave).value = proyecto.shape[clave];
   }
-  $("pattern").value = proyecto.background.pattern || "";
-  $("fila-gris").hidden = Boolean(proyecto.background.pattern);
-  if (proyecto.background.gray !== undefined) $("gray").value = proyecto.background.gray;
+  const b = proyecto.background;
+  $("pattern").value = b.pattern || (b.image !== undefined ? "__imagen__" : "");
+  if (b.gray !== undefined) $("gray").value = b.gray;
+  if (b.image !== undefined) {
+    $("fondo-imagen").value = b.image;
+    $("fondo-tile").value = b.tile ?? 1;
+    $("fondo-mirror").checked = b.mirror !== false;
+  }
+  mostrarControlesFondo();
+  const esEsfera = proyecto.shape.curve === "sphere";
+  $("fila-fit").hidden = !esEsfera;
+  if (esEsfera) $("fit").value = proyecto.shape.fit || "stretch";
   pintarCamposForma();
 }
 
@@ -360,9 +375,10 @@ async function inicio() {
   const est = await (await fetch("/api/estilos")).json();
   $("curve").innerHTML = est.formas.map((f) =>
     `<option value="${f}"${f === proyecto.shape.curve ? " selected" : ""}>${f}</option>`).join("");
-  $("pattern").innerHTML = '<option value="">(gris liso)</option>' +
-    est.patrones.map((p) =>
-      `<option${p === proyecto.background.pattern ? " selected" : ""}>${p}</option>`).join("");
+  $("pattern").innerHTML =
+    '<option value="">(gris liso)</option>' +
+    est.patrones.map((p) => `<option>${p}</option>`).join("") +
+    '<option value="__imagen__">imagen propia…</option>';
   $("capa-mask").innerHTML = est.mascaras.map((m) => `<option>${m}</option>`).join("");
 
   await recargarImagenes();
@@ -375,8 +391,11 @@ async function inicio() {
 
 async function recargarImagenes(seleccionada) {
   const { imagenes } = await (await fetch("/api/imagenes")).json();
-  $("anadir").innerHTML = '<option value="">(elegir imagen…)</option>' +
-    imagenes.map((n) => `<option>${n}</option>`).join("");
+  const opciones = imagenes.map((n) => `<option>${n}</option>`).join("");
+  $("anadir").innerHTML = '<option value="">(elegir imagen…)</option>' + opciones;
+  const fondoActual = $("fondo-imagen").value;
+  $("fondo-imagen").innerHTML = '<option value="">(elegir imagen…)</option>' + opciones;
+  $("fondo-imagen").value = fondoActual;
   if (seleccionada) $("anadir").value = seleccionada;
 }
 
@@ -389,15 +408,61 @@ for (const clave of ["min_thickness", "max_thickness", "frame_mm", "samples"]) {
     refrescar();
   };
 }
+// El desplegable de fondo mezcla tres origenes: gris liso, patron procedural
+// o imagen propia. El JSON solo admite uno, asi que se reconstruye entero.
 $("pattern").onchange = () => {
-  const patron = $("pattern").value;
-  proyecto.background = patron ? { pattern: patron } : { gray: parseInt($("gray").value, 10) };
-  $("fila-gris").hidden = Boolean(patron);
+  const elegido = $("pattern").value;
+  if (elegido === "__imagen__") {
+    proyecto.background = {
+      image: $("fondo-imagen").value || "",
+      tile: parseInt($("fondo-tile").value, 10),
+      mirror: $("fondo-mirror").checked,
+    };
+  } else if (elegido) {
+    proyecto.background = { pattern: elegido };
+  } else {
+    proyecto.background = { gray: parseInt($("gray").value, 10) };
+  }
+  mostrarControlesFondo();
+  if (proyecto.background.image === "") return;  // aun sin elegir imagen
   refrescar();
 };
 $("gray").onchange = () => {
   proyecto.background = { gray: parseInt($("gray").value, 10) };
   refrescar();
+};
+
+function mostrarControlesFondo() {
+  const b = proyecto.background;
+  $("fila-gris").hidden = b.gray === undefined;
+  $("fila-fondo-imagen").hidden = b.image === undefined;
+}
+
+function actualizarFondoImagen() {
+  proyecto.background = {
+    image: $("fondo-imagen").value,
+    tile: parseInt($("fondo-tile").value, 10),
+    mirror: $("fondo-mirror").checked,
+  };
+  if (proyecto.background.image) refrescar();
+}
+$("fondo-imagen").onchange = actualizarFondoImagen;
+$("fondo-tile").onchange = actualizarFondoImagen;
+$("fondo-mirror").onchange = actualizarFondoImagen;
+
+$("subir-fondo").onchange = async (ev) => {
+  const fichero = ev.target.files[0];
+  if (!fichero) return;
+  $("estado").textContent = "subiendo el fondo…";
+  const r = await fetch("/api/subir", {
+    method: "POST", headers: { "X-Nombre-Fichero": fichero.name }, body: fichero,
+  });
+  const datos = await r.json();
+  if (!r.ok) { $("estado").textContent = "error: " + datos.error; return; }
+  await recargarImagenes();
+  $("fondo-imagen").value = datos.path;
+  actualizarFondoImagen();
+  ev.target.value = "";
 };
 
 $("anadir").onchange = (e) => { if (e.target.value) { anadirCapa(e.target.value); e.target.value = ""; } };
@@ -431,6 +496,14 @@ $("capa-mask").onchange = () => {
 };
 $("capa-ring").onchange = () => {
   proyecto.layers[seleccion].ring = $("capa-ring").checked;
+  refrescar();
+};
+$("capa-prewarp").onchange = () => {
+  proyecto.layers[seleccion].prewarp = $("capa-prewarp").checked;
+  refrescar();
+};
+$("fit").onchange = () => {
+  proyecto.shape.fit = $("fit").value;
   refrescar();
 };
 $("capa-borrar").onclick = borrarCapa;

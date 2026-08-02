@@ -123,6 +123,8 @@ main { flex: 1; display: flex; flex-direction: column; padding: 14px; min-width:
 #lista-capas img { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; flex: none; }
 #lista-capas span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+p.ayuda { color: var(--suave); font-size: 10.5px; margin: 4px 0 0; line-height: 1.4; }
+
 #estado, #avisos { margin-top: 14px; font-size: 11px; white-space: pre-wrap; }
 #estado { color: var(--suave); }
 #avisos { color: #ffcf7a; }

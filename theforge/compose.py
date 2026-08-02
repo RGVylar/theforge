@@ -55,13 +55,25 @@ class PhotoLayer:
     mask: str = CIRCLE
     ring: bool = True
     gamma: float = 1.0
+    # Pre-deformacion equirectangular en la esfera: cada fila se ensancha por
+    # 1/cos(lat) para compensar lo que la esfera la va a comprimir, y asi la
+    # foto se ve sin aperar. Se apaga cuando la fuente YA viene equirectangular
+    # (una panoramica 2:1, o algo pre-deformado a mano): en ese caso volver a
+    # aplicarla la deformaria dos veces.
+    prewarp: bool = True
 
 
 @dataclass
 class Composition:
     params: LitoParams
     height_mm: float | None = None  # solo flat/cylindrical; en la esfera lo fija la geometria
-    pattern: str | None = None  # estilo de ornamento de fondo, o None = gris liso
+    # Fondo: un patron procedural, una imagen propia, o un gris liso. Excluyentes.
+    pattern: str | None = None
+    image: str | None = None
+    tile: int = 1  # cuantas veces se repite la imagen de fondo a lo ancho
+    # Espeja cada repeticion. Una imagen cualquiera no empalma al cerrar la
+    # esfera; espejada, si, por construccion. Es el mismo truco del ornamento.
+    mirror: bool = True
     gray: int = FONDO
     layers: list[PhotoLayer] = field(default_factory=list)
     base_dir: Path = field(default_factory=Path)  # para resolver rutas; no se serializa
@@ -80,10 +92,16 @@ class Composition:
         else:
             if not self.height_mm or self.height_mm <= 0:
                 raise ValueError(f"la forma {self.params.curve} necesita height_mm > 0")
+        if self.pattern is not None and self.image is not None:
+            raise ValueError("background: pattern e image son excluyentes")
         if self.pattern is not None and self.pattern not in STYLES:
             raise ValueError(
                 f"patron desconocido: {self.pattern!r}; hay {', '.join(STYLES)}"
             )
+        if self.image is not None and not self.resolve(self.image).is_file():
+            raise ValueError(f"fondo: no existe el fichero {self.resolve(self.image)}")
+        if self.tile < 1:
+            raise ValueError("tile debe ser >= 1")
         if not 0 <= self.gray <= 255:
             raise ValueError("gray debe estar entre 0 y 255")
         for i, capa in enumerate(self.layers):
@@ -100,7 +118,14 @@ class Composition:
                 raise ValueError(f"{donde}: gamma debe ser > 0")
 
     def band_aspect(self) -> float:
-        """Alto/ancho de la banda desplegada."""
+        """Alto/ancho del raster de la banda.
+
+        Con fit=conformal, ojo: este aspecto decide el corte superior real de
+        la pieza, no al reves. El reparto conforme deriva lat_max de la
+        proporcion de lo que se le da, asi que `lat_max_deg` solo sirve aqui
+        para elegir la forma del raster. El corte de verdad lo dice el layout,
+        y es lo que reportan `forge compose` y /api/info.
+        """
         if self.params.curve == SPHERE:
             span = math.radians(self.params.lat_max_deg - self.params.lat_min_deg)
             return span / (2 * math.pi)
@@ -116,9 +141,9 @@ _SHAPE_COMUN = {"curve", "min_thickness", "max_thickness", "frame_mm", "samples"
 _SHAPE_POR_CURVA = {
     "flat": {"width_mm", "height_mm"},
     "cylindrical": {"width_mm", "height_mm", "arc_degrees"},
-    "sphere": {"diameter_mm", "lat_min_deg", "lat_max_deg"},
+    "sphere": {"diameter_mm", "lat_min_deg", "lat_max_deg", "fit"},
 }
-_CLAVES_CAPA = {"type", "path", "cx", "cy", "scale", "mask", "ring", "gamma"}
+_CLAVES_CAPA = {"type", "path", "cx", "cy", "scale", "mask", "ring", "gamma", "prewarp"}
 
 
 def _rechazar_desconocidas(d: dict, permitidas: set[str], contexto: str) -> None:
@@ -141,9 +166,10 @@ def from_dict(datos: dict, base_dir: Path | str = ".") -> Composition:
     params = LitoParams(**shape)
 
     fondo = datos.get("background") or {"gray": FONDO}
-    _rechazar_desconocidas(fondo, {"pattern", "gray"}, "background")
-    if "pattern" in fondo and "gray" in fondo:
-        raise ValueError("background: pattern y gray son excluyentes")
+    _rechazar_desconocidas(fondo, {"pattern", "image", "tile", "mirror", "gray"}, "background")
+    elegidos = [c for c in ("pattern", "image", "gray") if c in fondo]
+    if len(elegidos) > 1:
+        raise ValueError(f"background: {' y '.join(elegidos)} son excluyentes")
 
     capas = []
     for i, cruda in enumerate(datos.get("layers") or []):
@@ -158,6 +184,9 @@ def from_dict(datos: dict, base_dir: Path | str = ".") -> Composition:
         params=params,
         height_mm=height_mm,
         pattern=fondo.get("pattern"),
+        image=fondo.get("image"),
+        tile=int(fondo.get("tile", 1)),
+        mirror=bool(fondo.get("mirror", True)),
         gray=int(fondo.get("gray", FONDO)),
         layers=capas,
         base_dir=Path(base_dir),
@@ -171,16 +200,21 @@ def to_dict(comp: Composition) -> dict:
                    "samples": p.samples}
     if p.curve == SPHERE:
         shape |= {"diameter_mm": p.diameter_mm, "lat_min_deg": p.lat_min_deg,
-                  "lat_max_deg": p.lat_max_deg}
+                  "lat_max_deg": p.lat_max_deg, "fit": p.fit}
     else:
         shape |= {"width_mm": p.width_mm, "height_mm": comp.height_mm}
         if p.curve == "cylindrical":
             shape["arc_degrees"] = p.arc_degrees
 
-    fondo = {"pattern": comp.pattern} if comp.pattern else {"gray": comp.gray}
+    if comp.pattern:
+        fondo = {"pattern": comp.pattern}
+    elif comp.image:
+        fondo = {"image": comp.image, "tile": comp.tile, "mirror": comp.mirror}
+    else:
+        fondo = {"gray": comp.gray}
     capas = [
         {"type": "photo", "path": c.path, "cx": c.cx, "cy": c.cy, "scale": c.scale,
-         "mask": c.mask, "ring": c.ring, "gamma": c.gamma}
+         "mask": c.mask, "ring": c.ring, "gamma": c.gamma, "prewarp": c.prewarp}
         for c in comp.layers
     ]
     return {"version": VERSION, "shape": shape, "background": fondo, "layers": capas}
@@ -206,6 +240,33 @@ def save_project(comp: Composition, path: str | Path) -> Path:
 # --------------------------------------------------------------------------
 # Render
 # --------------------------------------------------------------------------
+
+
+def _fondo_desde_imagen(comp: Composition, size: tuple[int, int]) -> Image.Image:
+    """Fondo a partir de una imagen propia, repetida y opcionalmente espejada.
+
+    Con mirror, cada repeticion es la imagen seguida de su reflejo. Asi el
+    borde derecho de una copia es identico al izquierdo de la siguiente, y al
+    cerrar la pieza el ultimo empalma con el primero: la costura desaparece sin
+    tener que exigir que la imagen sea teselable.
+    """
+    ancho, alto = size
+    fuente = load_grayscale(comp.resolve(comp.image))
+    unidad = max(2, ancho // comp.tile)
+
+    if comp.mirror:
+        media = max(1, unidad // 2)
+        izquierda = fuente.resize((media, alto), Image.LANCZOS)
+        celda = Image.new("L", (media * 2, alto))
+        celda.paste(izquierda, (0, 0))
+        celda.paste(izquierda.transpose(Image.FLIP_LEFT_RIGHT), (media, 0))
+    else:
+        celda = fuente.resize((unidad, alto), Image.LANCZOS)
+
+    banda = Image.new("L", size)
+    for x in range(0, ancho, celda.width):
+        banda.paste(celda, (x, 0))
+    return banda
 
 
 def _recorte_cuadrado(img: Image.Image) -> Image.Image:
@@ -237,7 +298,7 @@ def _pegar_foto(banda: Image.Image, capa: PhotoLayer, comp: Composition,
     x0 = int(round(capa.cx * W - dw / 2))
     y0 = int(round(capa.cy * H - dh / 2))
 
-    if lats is not None:
+    if lats is not None and capa.prewarp:
         # Pre-deformacion alrededor del centro de ESTA capa: cada fila se
         # ensancha por lo que la esfera la va a comprimir.
         filas = np.clip(np.arange(y0, y0 + dh), 0, H - 1)
@@ -282,6 +343,8 @@ def render_band(comp: Composition, width_px: int = 3600) -> Image.Image:
 
     if comp.pattern:
         banda = ornament_field((W, H), comp.pattern)
+    elif comp.image:
+        banda = _fondo_desde_imagen(comp, (W, H))
     else:
         banda = Image.new("L", (W, H), comp.gray)
 
