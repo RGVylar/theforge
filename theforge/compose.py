@@ -141,7 +141,7 @@ _SHAPE_COMUN = {"curve", "min_thickness", "max_thickness", "frame_mm", "samples"
 _SHAPE_POR_CURVA = {
     "flat": {"width_mm", "height_mm"},
     "cylindrical": {"width_mm", "height_mm", "arc_degrees"},
-    "sphere": {"diameter_mm", "lat_min_deg", "lat_max_deg", "fit"},
+    "sphere": {"diameter_mm", "lat_min_deg", "lat_max_deg", "fit", "cap_top"},
 }
 _CLAVES_CAPA = {"type", "path", "cx", "cy", "scale", "mask", "ring", "gamma", "prewarp"}
 
@@ -200,7 +200,7 @@ def to_dict(comp: Composition) -> dict:
                    "samples": p.samples}
     if p.curve == SPHERE:
         shape |= {"diameter_mm": p.diameter_mm, "lat_min_deg": p.lat_min_deg,
-                  "lat_max_deg": p.lat_max_deg, "fit": p.fit}
+                  "lat_max_deg": p.lat_max_deg, "fit": p.fit, "cap_top": p.cap_top}
     else:
         shape |= {"width_mm": p.width_mm, "height_mm": comp.height_mm}
         if p.curve == "cylindrical":

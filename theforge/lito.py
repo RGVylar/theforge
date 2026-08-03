@@ -71,6 +71,11 @@ class LitoParams:
     lat_min_deg: float = -45.0  # corte inferior; -45 es el limite sin soportes
     lat_max_deg: float = 75.0  # corte superior; ignorado si fit=conformal
     fit: str = STRETCH
+    # Sella la boca de arriba con dos tapas (exterior e interior) en vez de
+    # dejarla abierta. La de abajo se queda siempre abierta -es el acceso
+    # para el portalamparas y el cable-, capar las dos no da una bola hueca:
+    # da dos cascaras SEPARADAS sin ningun punto de contacto, ver closed_shell.
+    cap_top: bool = False
 
     def validate(self) -> None:
         if self.width_mm <= 0:
@@ -343,4 +348,5 @@ def lithophane(image: str | Path | Image.Image, params: LitoParams) -> np.ndarra
     lay = layout(img, params)
     espesor = thickness_map(img, params, lay)
     front, back = surfaces(espesor, params, lay)
-    return closed_shell(front, back, wrap_u=params.wraps_u)
+    cap_ends = (False, params.cap_top) if params.curve == SPHERE else (False, False)
+    return closed_shell(front, back, wrap_u=params.wraps_u, cap_ends=cap_ends)

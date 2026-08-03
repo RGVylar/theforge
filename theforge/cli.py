@@ -86,6 +86,11 @@ def _add_lito_parser(sub: argparse._SubParsersAction) -> None:
         "--repeat", type=int, default=1, help="copias de la imagen alrededor de la pieza (1)"
     )
     p.add_argument(
+        "--cap-top",
+        action="store_true",
+        help="sella la boca de arriba de la esfera con una tapa, en vez de dejarla abierta",
+    )
+    p.add_argument(
         "--samples", type=int, default=300, help="muestras a lo ancho de la pieza (300)"
     )
     p.add_argument("--frame", type=float, default=0.0, help="marco macizo en mm (0)")
@@ -122,8 +127,11 @@ def _describe_shape(params: LitoParams, lay: Layout) -> None:
         f"{lat_min:.1f} a {lat_max:.1f} grados{derivada}"
     )
     boca = 2 * radio * math.cos(math.radians(lat_min))
-    respiradero = 2 * radio * math.cos(math.radians(lat_max))
-    print(f"bocas     abajo {boca:.1f} mm de diametro, arriba {respiradero:.1f} mm")
+    if params.cap_top:
+        print(f"bocas     abajo {boca:.1f} mm de diametro, arriba sellada (--cap-top)")
+    else:
+        respiradero = 2 * radio * math.cos(math.radians(lat_max))
+        print(f"bocas     abajo {boca:.1f} mm de diametro, arriba {respiradero:.1f} mm")
 
     # En una esfera la pendiente de la pared es dr/dz = -tan(latitud), asi que
     # el voladizo respecto a la vertical coincide con la latitud.
@@ -134,6 +142,16 @@ def _describe_shape(params: LitoParams, lay: Layout) -> None:
         print(
             f"AVISO: el corte superior queda a {lat_max:.1f} grados; por encima de 80 "
             "la pared es casi horizontal y tendria que puentear al aire"
+        )
+    if params.cap_top:
+        # La tapa es un puente plano sobre el hueco que queda a lat_max, no
+        # una superficie curva que se acerca al polo: es una cuestion de
+        # bridging, no de la regla de los 45 grados. Sin impresora para
+        # comprobarlo, pero los puentes de este orden (unas pocas decenas de
+        # mm) son terreno conocido en PLA con buena refrigeracion.
+        print(
+            "          la tapa de arriba se imprime como un puente sin apoyo: "
+            "usa buena refrigeracion (sin verificar, no tengo impresora)"
         )
     if params.frame_mm <= 0:
         # El borde exterior esta a radio R+grosor, y el grosor lo pone la
@@ -179,6 +197,7 @@ def cmd_lito(args: argparse.Namespace) -> int:
         lat_min_deg=args.lat_min,
         lat_max_deg=args.lat_max,
         fit=args.fit,
+        cap_top=args.cap_top,
     )
     params.validate()
 

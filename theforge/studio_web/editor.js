@@ -24,7 +24,8 @@ const CAMPOS_FORMA = {
 const PREDETERMINADOS = {
   flat: { width_mm: 120, height_mm: 90 },
   cylindrical: { width_mm: 160, height_mm: 110, arc_degrees: 360 },
-  sphere: { diameter_mm: 120, lat_min_deg: -45, lat_max_deg: 75, fit: "stretch" },
+  sphere: { diameter_mm: 120, lat_min_deg: -45, lat_max_deg: 75, fit: "stretch",
+            cap_top: false },
 };
 
 let proyecto = {
@@ -114,7 +115,8 @@ async function refrescar() {
     decir(
       `${info.superficie_mm.ancho} × ${info.superficie_mm.alto} mm` +
       `  ·  ${Math.round(info.relieve * 100)}% con relieve` +
-      (e ? `  ·  bocas ${e.boca_abajo_mm} / ${e.boca_arriba_mm} mm` +
+      (e ? `  ·  boca abajo ${e.boca_abajo_mm} mm` +
+           (e.cap_top ? "  ·  arriba sellada" : `  ·  boca arriba ${e.boca_arriba_mm} mm`) +
            `  ·  voladizo ${e.voladizo_grados}°` : "")
     );
     $("avisos").textContent = (info.avisos || []).join("\n");
@@ -315,6 +317,7 @@ function cambiarForma(curva) {
     for (const [clave] of campos) delete s[clave];
   }
   delete s.fit;
+  delete s.cap_top;
   Object.assign(s, { curve: curva }, PREDETERMINADOS[curva]);
   sincronizarPanel();
   pintarLista();
@@ -375,7 +378,11 @@ function sincronizarPanel() {
   mostrarControlesFondo();
   const esEsfera = proyecto.shape.curve === "sphere";
   $("fila-fit").hidden = !esEsfera;
-  if (esEsfera) $("fit").value = proyecto.shape.fit || "stretch";
+  $("fila-cap-top").hidden = !esEsfera;
+  if (esEsfera) {
+    $("fit").value = proyecto.shape.fit || "stretch";
+    $("cap_top").checked = Boolean(proyecto.shape.cap_top);
+  }
   pintarCamposForma();
 }
 
@@ -545,6 +552,10 @@ $("capa-prewarp").onchange = () => {
 };
 $("fit").onchange = () => {
   proyecto.shape.fit = $("fit").value;
+  refrescar();
+};
+$("cap_top").onchange = () => {
+  proyecto.shape.cap_top = $("cap_top").checked;
   refrescar();
 };
 $("capa-borrar").onclick = borrarCapa;

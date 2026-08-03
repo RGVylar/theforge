@@ -62,6 +62,15 @@ def uniform(valor: int, size=(32, 24)) -> Image.Image:
             ),
             id="esfera-conforme-con-marco",
         ),
+        pytest.param(
+            LitoParams(samples=SAMPLES, curve="sphere", cap_top=True), id="esfera-cap-top"
+        ),
+        pytest.param(
+            LitoParams(
+                samples=SAMPLES, curve="sphere", cap_top=True, lat_max_deg=85, frame_mm=5
+            ),
+            id="esfera-cap-top-casi-al-polo-con-marco",
+        ),
     ],
 )
 def test_la_malla_es_cerrada(gradient, params):
@@ -188,6 +197,40 @@ def test_la_esfera_apoya_en_z0_y_deja_las_dos_bocas(gradient):
     assert np.linalg.norm(arriba[:, :2], axis=1).min() > 1.0
 
 
+def test_cap_top_sella_la_boca_de_arriba_y_deja_abierta_la_de_abajo(gradient):
+    """Con cap_top, arriba ya no hay vertices sueltos alrededor del eje: la
+    tapa (dos abanicos, exterior e interior) cierra ese hueco. Abajo sigue
+    siendo un agujero de verdad -portalamparas y cable-, sin tocar."""
+    params = LitoParams(samples=SAMPLES, curve="sphere", diameter_mm=100, cap_top=True)
+    malla = lithophane(gradient, params)
+    informe = check_mesh(malla)
+    assert informe.watertight, informe
+
+    puntos = malla.reshape(-1, 3)
+    # Caracteristica de Euler 2: bolsillo ciego (genero 0), no una rosquilla.
+    euler = informe.vertices - informe.edges + informe.triangles
+    assert euler == 2
+
+    # La boca de abajo sigue intacta (mismo radio que sin cap_top).
+    radio = params.radius_mm
+    en_el_suelo = puntos[puntos[:, 2] < puntos[:, 2].min() + 1e-6]
+    esperado = radio * np.cos(np.radians(params.lat_min_deg))
+    assert np.linalg.norm(en_el_suelo[:, :2], axis=1).max() == pytest.approx(
+        esperado + params.max_thickness * np.cos(np.radians(params.lat_min_deg)), rel=0.05
+    )
+
+
+def test_sin_cap_top_la_esfera_es_una_rosquilla_topologica(gradient):
+    """La documentacion de que 'las dos bocas' es literal: sin cap_top, la
+    pieza tiene un tunel de un lado a otro (Euler 0), no un bolsillo (Euler 2).
+    """
+    params = LitoParams(samples=SAMPLES, curve="sphere", diameter_mm=100, cap_top=False)
+    informe = check_mesh(lithophane(gradient, params))
+    assert informe.watertight, informe
+    euler = informe.vertices - informe.edges + informe.triangles
+    assert euler == 0
+
+
 def test_la_esfera_con_stretch_solo_es_fiel_en_el_ecuador():
     """La escala horizontal vale cos(latitud): la banda por defecto llega al 26%."""
     cuadrada = Image.new("L", (640, 640))
@@ -301,3 +344,20 @@ def test_cli_genera_un_stl_cerrado(tmp_path, gradient):
 
 def test_cli_error_si_la_imagen_no_existe(tmp_path):
     assert main(["lito", str(tmp_path / "no_existe.png")]) == 2
+
+
+def test_cli_cap_top(tmp_path, gradient, capsys):
+    entrada = tmp_path / "prueba.png"
+    salida = tmp_path / "prueba.stl"
+    gradient.save(entrada)
+
+    codigo = main(
+        ["lito", str(entrada), "-o", str(salida), "--curve", "sphere",
+         "--diameter", "80", "--samples", str(SAMPLES), "--frame", "3", "--cap-top"]
+    )
+
+    assert codigo == 0
+    assert check_mesh(read_binary_stl(salida)).watertight
+    salida_texto = capsys.readouterr().out
+    assert "sellada" in salida_texto
+    assert "puente" in salida_texto

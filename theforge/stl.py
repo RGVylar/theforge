@@ -74,6 +74,23 @@ def _stitch_loops(front: np.ndarray, back: np.ndarray) -> np.ndarray:
     return np.concatenate([tri1, tri2])
 
 
+def disc_cap(ring: np.ndarray, center: np.ndarray | None = None, flip: bool = False) -> np.ndarray:
+    """Tapa un borde con un abanico de triangulos hasta un punto central.
+
+    `ring` es un anillo cerrado sin duplicar el primer punto (como una fila de
+    grid_surface). Vale para anillos no exactamente planos: el centro por
+    defecto es la media de los puntos, que da un abanico razonable aunque el
+    anillo ondule (por ejemplo, si el grosor de la pieza varia punto a punto).
+    """
+    ring = np.asarray(ring, dtype=float)
+    centro = np.asarray(center, dtype=float) if center is not None else ring.mean(axis=0)
+    a = ring
+    b = np.roll(ring, -1, axis=0)
+    c = np.broadcast_to(centro, a.shape)
+    tris = np.stack([a, b, c], axis=-2)
+    return tris[:, ::-1] if flip else tris
+
+
 def _boundary_indices(nv: int, nu: int) -> tuple[np.ndarray, np.ndarray]:
     """Indices (j, i) del borde de la rejilla en sentido antihorario."""
     bottom_i = np.arange(nu - 1)
@@ -89,17 +106,52 @@ def _boundary_indices(nv: int, nu: int) -> tuple[np.ndarray, np.ndarray]:
     return j, i
 
 
-def closed_shell(front: np.ndarray, back: np.ndarray, wrap_u: bool = False) -> np.ndarray:
+def closed_shell(
+    front: np.ndarray,
+    back: np.ndarray,
+    wrap_u: bool = False,
+    cap_ends: tuple[bool, bool] = (False, False),
+) -> np.ndarray:
     """Solido cerrado entre dos rejillas con la misma topologia.
 
     front es la cara "hacia fuera" (normal du x dv), back la opuesta. Los bordes
     libres se cierran con paredes laterales.
+
+    En una superficie cerrada en u (wrap_u), cada extremo (fila 0 y fila -1) se
+    puede cerrar de dos formas distintas, y no son intercambiables:
+
+        sin capar     se cose el anillo exterior (front) directamente al
+                      interior (back), formando una arandela. El resultado es
+                      cerrado (0 aristas abiertas) pero con un tunel pasante en
+                      ese extremo -topologia de rosquilla-, como un cilindro o
+                      una esfera con boca.
+        cap_ends[k]   cada anillo se tapa por separado con su propio abanico
+                      (disc_cap), sellando ese extremo. El resultado sigue
+                      siendo cerrado, pero ya no hay tunel: es un bolsillo
+                      ciego, accesible solo por el extremo que se deje sin
+                      capar.
+
+    Anadir una tapa sobre un anillo YA cosido en arandela no sirve: esa arista
+    ya la comparten dos triangulos, y una tercera pieza encima solo produce
+    aristas mal contadas. Por eso esto va dentro de closed_shell y no como un
+    paso aparte.
+
+    Limite conocido: si en un extremo capado el anillo front y el anillo back
+    llegan exactamente al mismo punto (mismo centro para las dos tapas, p.ej.
+    un grosor cero ahi), weld_vertices fusiona los dos vertices centrales en
+    uno y el vertice resultante deja de ser variedad-2 (dos abanicos pegados
+    solo por la punta): check_mesh no lo detecta porque solo cuenta aristas,
+    no vertices, y la caracteristica de Euler sale impar. En una litofania de
+    verdad esto no ocurre: min_thickness > 0 esta garantizado por validate(),
+    asi que los dos centros siempre quedan separados en Z.
     """
     front = np.asarray(front, dtype=float)
     back = np.asarray(back, dtype=float)
     if front.shape != back.shape:
         raise ValueError(f"rejillas incompatibles: {front.shape} vs {back.shape}")
     nv, nu = front.shape[:2]
+    if any(cap_ends) and not wrap_u:
+        raise ValueError("cap_ends solo tiene sentido en superficies cerradas en u")
 
     parts = [
         grid_surface(front, wrap_u=wrap_u),
@@ -107,9 +159,16 @@ def closed_shell(front: np.ndarray, back: np.ndarray, wrap_u: bool = False) -> n
     ]
 
     if wrap_u:
-        # Solo hay borde arriba y abajo; cada uno es un anillo cerrado.
-        parts.append(_stitch_loops(front[0], back[0]))
-        parts.append(_stitch_loops(front[-1, ::-1], back[-1, ::-1]))
+        extremos = ((front[0], back[0]), (front[-1, ::-1], back[-1, ::-1]))
+        for capar, (anillo_frente, anillo_dorso) in zip(cap_ends, extremos):
+            if capar:
+                # front y back giran en el mismo sentido pero son superficies
+                # opuestas (grid_surface ya invierte back con flip=True), asi
+                # que sus tapas necesitan winding tambien opuesto entre si.
+                parts.append(disc_cap(anillo_frente, flip=True))
+                parts.append(disc_cap(anillo_dorso, flip=False))
+            else:
+                parts.append(_stitch_loops(anillo_frente, anillo_dorso))
     else:
         j, i = _boundary_indices(nv, nu)
         parts.append(_stitch_loops(front[j, i], back[j, i]))

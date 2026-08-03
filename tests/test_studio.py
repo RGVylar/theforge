@@ -219,6 +219,24 @@ def test_info_reporta_la_latitud_real_no_la_pedida(cliente):
     assert b["boca_arriba_mm"] > a["boca_arriba_mm"]  # corta mas abajo = boca mayor
 
 
+def test_info_refleja_cap_top_y_avisa_del_puente(cliente):
+    proyecto = proyecto_esfera()
+    proyecto["shape"]["cap_top"] = True
+    _, _, cuerpo = cliente("POST", "/api/info", proyecto)
+    info = json.loads(cuerpo)
+    assert info["esfera"]["cap_top"] is True
+    assert any("puente" in a for a in info["avisos"])
+
+
+def test_stl_con_cap_top_da_malla_cerrada_de_verdad(cliente):
+    proyecto = proyecto_esfera()
+    proyecto["shape"]["cap_top"] = True
+    estado, _, cuerpo = cliente("POST", "/api/stl", proyecto)
+    assert estado == HTTPStatus.OK
+    (cuantos,) = struct.unpack("<I", cuerpo[80:84])
+    assert len(cuerpo) == 84 + cuantos * 50
+
+
 def test_info_avisa_de_lo_que_no_se_va_a_imprimir_bien(cliente):
     proyecto = proyecto_esfera()
     proyecto["shape"]["lat_min_deg"] = -70.0

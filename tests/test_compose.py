@@ -389,6 +389,18 @@ def test_el_proyecto_acaba_en_malla_cerrada(tmp_path, forma):
     assert informe.volume_mm3 > 0
 
 
+def test_cap_top_viaja_por_el_proyecto_y_cierra_la_malla(tmp_path):
+    comp = esfera(tmp_path, scale=0.6)
+    comp.params.cap_top = True
+    recargado = load_project(save_project(comp, tmp_path / "p.json"))
+    assert recargado.params.cap_top is True
+
+    informe = check_mesh(build_mesh(recargado, width_px=ANCHO_PX))
+    assert informe.watertight, informe
+    euler = informe.vertices - informe.edges + informe.triangles
+    assert euler == 2  # bolsillo ciego, no rosquilla
+
+
 def test_cli_compose(tmp_path, gradient):
     entrada = tmp_path / "foto.png"
     gradient.save(entrada)

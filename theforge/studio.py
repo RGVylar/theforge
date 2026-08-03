@@ -202,7 +202,12 @@ def api_info(datos: dict, raiz: Path, ancho_px: int) -> dict:
             "diametro_mm": p.diameter_mm,
             "lat_min_grados": round(lat_min, 1),
             "lat_max_grados": round(lat_max, 1),
+            "cap_top": p.cap_top,
             "boca_abajo_mm": round(2 * radio * math.cos(math.radians(lat_min)), 1),
+            # Sin cap_top es un agujero real; con cap_top no hay boca que
+            # medir, pero se deja el valor (el diametro que TENDRIA si no
+            # estuviera sellada) porque es el ancho del puente que hay que
+            # imprimir para cerrarla.
             "boca_arriba_mm": round(2 * radio * math.cos(math.radians(lat_max)), 1),
             "voladizo_grados": round(abs(lat_min), 1),
         }
@@ -210,6 +215,11 @@ def api_info(datos: dict, raiz: Path, ancho_px: int) -> dict:
             info["avisos"].append("el voladizo pasa de 45 grados: necesitara soportes")
         if lat_max > 80:
             info["avisos"].append("el corte superior pasa de 80 grados: tendra que puentear")
+        if p.cap_top:
+            info["avisos"].append(
+                "la tapa de arriba se imprime en puente, sin apoyo debajo: "
+                "usa buena refrigeracion (sin verificar en impresora real)"
+            )
         if p.frame_mm <= 0:
             info["avisos"].append("sin marco el borde de apoyo queda ondulado")
     return info
