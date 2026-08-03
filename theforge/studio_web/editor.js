@@ -41,6 +41,14 @@ let visor = null;
 let temporizador = null;
 const aspectos = new Map();  // ruta -> alto/ancho, para dibujar bien las cajas
 
+// Unico canal por el que el editor cuenta lo que pasa. Los errores van en rojo
+// porque un mensaje gris entre otros grises se lee como "no ha hecho nada".
+function decir(texto, malo = false) {
+  const el = $("estado");
+  el.textContent = texto;
+  el.classList.toggle("malo", malo);
+}
+
 // --- red ------------------------------------------------------------------
 
 async function pedir(ruta, cuerpo) {
@@ -79,7 +87,7 @@ function pedirRefresco(ms = 220) {
 }
 
 async function refrescar() {
-  $("estado").textContent = "generando…";
+  decir("generando…");
   $("avisos").textContent = "";
   try {
     if (vista === "modelo") {
@@ -91,8 +99,8 @@ async function refrescar() {
       ligero.shape.samples = Math.min(proyecto.shape.samples, 320);
       const buffer = await (await pedir("/api/stl", ligero)).arrayBuffer();
       const malla = visor.cargar(buffer);
-      $("estado").textContent = `${malla.triangulos.toLocaleString("es")} triángulos` +
-        `\ncaja ${malla.max.map((m, i) => (m - malla.min[i]).toFixed(0)).join(" × ")} mm`;
+      decir(`${malla.triangulos.toLocaleString("es")} triángulos  ·  ` +
+        `caja ${malla.max.map((m, i) => (m - malla.min[i]).toFixed(0)).join(" × ")} mm`);
       return;
     }
 
@@ -103,13 +111,15 @@ async function refrescar() {
 
     const info = await (await pedir("/api/info", proyecto)).json();
     const e = info.esfera;
-    $("estado").textContent =
+    decir(
       `${info.superficie_mm.ancho} × ${info.superficie_mm.alto} mm` +
       `  ·  ${Math.round(info.relieve * 100)}% con relieve` +
-      (e ? `\nbocas ${e.boca_abajo_mm} / ${e.boca_arriba_mm} mm · voladizo ${e.voladizo_grados}°` : "");
+      (e ? `  ·  bocas ${e.boca_abajo_mm} / ${e.boca_arriba_mm} mm` +
+           `  ·  voladizo ${e.voladizo_grados}°` : "")
+    );
     $("avisos").textContent = (info.avisos || []).join("\n");
   } catch (err) {
-    $("estado").textContent = "error: " + err.message;
+    decir("error: " + err.message, true);
   }
 }
 
@@ -318,7 +328,7 @@ function guardarProyecto() {
   const url = URL.createObjectURL(blob);
   Object.assign(document.createElement("a"), { href: url, download: "proyecto.json" }).click();
   URL.revokeObjectURL(url);
-  $("estado").textContent = "proyecto guardado";
+  decir("proyecto guardado");
 }
 
 async function cargarProyecto(fichero) {
@@ -333,20 +343,20 @@ async function cargarProyecto(fichero) {
     pintarLista();
     pintarCajas();
   } catch (err) {
-    $("estado").textContent = "no se pudo cargar: " + err.message;
+    decir("no se pudo cargar: " + err.message, true);
   }
 }
 
 async function exportar() {
-  $("estado").textContent = "construyendo y comprobando la malla…";
+  decir("construyendo y comprobando la malla…");
   try {
     const r = await pedir("/api/stl", proyecto);
     const url = URL.createObjectURL(await r.blob());
     Object.assign(document.createElement("a"), { href: url, download: "pieza.stl" }).click();
     URL.revokeObjectURL(url);
-    $("estado").textContent = "STL descargado";
+    decir("STL descargado");
   } catch (err) {
-    $("estado").textContent = "no exportado: " + err.message;
+    decir("no exportado: " + err.message, true);
   }
 }
 
@@ -427,7 +437,7 @@ $("pattern").onchange = () => {
   if (proyecto.background.image === "") {
     // Sin imagen elegida no hay nada que pedir al servidor, pero decirlo evita
     // que parezca que el desplegable no ha hecho nada.
-    $("estado").textContent = "elige una imagen de fondo o impórtala del disco";
+    decir("elige una imagen de fondo, o impórtala del disco");
     return;
   }
   refrescar();
@@ -470,7 +480,7 @@ $("subir-fondo").onchange = async (ev) => {
 // Cualquier fallo tiene que acabar en pantalla: un manejador async que revienta
 // deja un rechazo no capturado y, desde fuera, parece que el boton no hace nada.
 async function subirImagen(fichero) {
-  $("estado").textContent = "subiendo…";
+  decir(`subiendo ${fichero.name} (${Math.round(fichero.size / 1024)} kB)…`);
   try {
     const r = await fetch("/api/subir", {
       method: "POST",
@@ -481,10 +491,10 @@ async function subirImagen(fichero) {
     });
     const datos = await r.json();
     if (!r.ok) throw new Error(datos.error || `${r.status} ${r.statusText}`);
-    $("estado").textContent = "importada " + datos.path;
+    decir(`importada ${datos.path} (${datos.ancho}×${datos.alto} px)`);
     return datos.path;
   } catch (err) {
-    $("estado").textContent = "no se pudo importar: " + err.message;
+    decir("no se pudo importar: " + err.message, true);
     return null;
   }
 }

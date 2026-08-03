@@ -312,8 +312,17 @@ def test_subir_algo_que_no_es_imagen(cliente, raiz):
         "POST", "/api/subir", b"esto no es un png", {"X-Nombre-Fichero": "falsa.png"}
     )
     assert estado == HTTPStatus.BAD_REQUEST
-    assert "imagen" in json.loads(cuerpo)["error"]
+    error = json.loads(cuerpo)["error"]
+    assert "falsa.png" in error and "imagen" in error
+    # El repr del BytesIO de PIL no le dice nada a quien lo lee.
+    assert "BytesIO" not in error
     assert not (raiz / "falsa.png").exists()
+
+
+def test_subir_sin_datos(cliente):
+    estado, _, cuerpo = cliente("POST", "/api/subir", b"", {"X-Nombre-Fichero": "vacia.png"})
+    assert estado == HTTPStatus.BAD_REQUEST
+    assert "ningun dato" in json.loads(cuerpo)["error"]
 
 
 def test_subir_con_nombre_con_acentos(cliente, raiz):

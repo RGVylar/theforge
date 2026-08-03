@@ -72,6 +72,11 @@ button.peligro { color: var(--peligro); }
 
 main { flex: 1; display: flex; flex-direction: column; padding: 14px; min-width: 0; }
 
+/* Los paneles no deben empujar el ancho de la pagina: sin esto, con la ventana
+   justa el de la derecha se sale y no se ve entero. */
+.panel { min-width: 0; }
+body { overflow-x: hidden; }
+
 .pestanas { display: flex; gap: 6px; margin-bottom: 12px; flex: none; }
 .pestanas button { width: auto; margin: 0; padding: 6px 14px; }
 .pestanas button[aria-selected="true"] {
@@ -125,9 +130,19 @@ main { flex: 1; display: flex; flex-direction: column; padding: 14px; min-width:
 
 p.ayuda { color: var(--suave); font-size: 10.5px; margin: 4px 0 0; line-height: 1.4; }
 
-#estado, #avisos { margin-top: 14px; font-size: 11px; white-space: pre-wrap; }
-#estado { color: var(--suave); }
-#avisos { color: #ffcf7a; }
+#barra {
+  flex: none;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  min-height: 38px;
+}
+#estado, #avisos { font-size: 12px; white-space: pre-wrap; }
+#estado { color: var(--texto); }
+#estado.malo { color: var(--peligro); font-weight: 600; }
+#avisos { color: #ffcf7a; margin-top: 4px; }
 
 /* En ventanas estrechas los dos paneles se comen el lienzo: con 937 px de
    ancho quedaban 401 para la pieza. Primero adelgazan, y si aun asi no cabe,

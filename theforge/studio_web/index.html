@@ -53,7 +53,10 @@
       <label for="fondo-imagen">Imagen de fondo</label>
       <select id="fondo-imagen"></select>
       <label for="subir-fondo">Importar del disco</label>
-      <input type="file" id="subir-fondo" accept="image/*">
+      <input type="file" id="subir-fondo" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff">
+      <p class="ayuda">PNG, JPG, BMP, GIF, WEBP o TIFF · hasta 64 MB. Tras
+        importar, el selector vuelve a «Ningún archivo» a propósito, para poder
+        reimportar el mismo. Mira la barra de abajo.</p>
       <label for="fondo-tile">Repeticiones a lo ancho</label>
       <input type="number" id="fondo-tile" min="1" max="12" step="1" value="1">
       <label class="check"><input type="checkbox" id="fondo-mirror" checked> Espejar</label>
@@ -69,9 +72,6 @@
     <input type="file" id="fichero-proyecto" accept=".json" hidden>
     <button id="btn-exportar" class="principal">Exportar STL</button>
   </section>
-
-  <div id="estado"></div>
-  <div id="avisos"></div>
 </aside>
 
 <main>
@@ -89,6 +89,15 @@
     </div>
     <canvas id="visor" hidden></canvas>
   </div>
+
+  <!-- El estado va aqui y no en un panel lateral: es el unico canal por el que
+       el editor cuenta lo que pasa, errores incluidos, y en el panel quedaba
+       por debajo del pliegue. Un error que no se ve es un boton que no hace
+       nada. -->
+  <footer id="barra">
+    <div id="estado"></div>
+    <div id="avisos"></div>
+  </footer>
 </main>
 
 <aside class="panel" id="capas">
@@ -96,7 +105,7 @@
   <label for="anadir">Añadir foto</label>
   <select id="anadir"></select>
   <label for="subir">Importar del disco</label>
-  <input type="file" id="subir" accept="image/*">
+  <input type="file" id="subir" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff">
   <ol id="lista-capas"></ol>
   <div id="detalle-capa" hidden>
     <h2>Capa seleccionada</h2>

@@ -233,11 +233,17 @@ def api_subir(nombre: str, cuerpo: bytes, raiz: Path) -> dict:
     guarda. No queremos que el editor deje basura que luego reviente al render.
     """
     limpio = nombre_seguro(nombre)
+    if not cuerpo:
+        raise ErrorPeticion(f"{limpio}: no ha llegado ningun dato")
     try:
-        imagen = Image.open(io.BytesIO(cuerpo))
-        imagen.verify()
+        Image.open(io.BytesIO(cuerpo)).verify()
     except (UnidentifiedImageError, OSError) as err:
-        raise ErrorPeticion(f"el fichero no es una imagen valida: {err}") from err
+        # El mensaje de PIL trae el repr del BytesIO, que no le dice nada a
+        # nadie. Lo que importa es que el fichero no se puede abrir.
+        raise ErrorPeticion(
+            f"{limpio}: no se pudo leer como imagen "
+            f"({len(cuerpo)} bytes). Prueba a reexportarla como PNG o JPG."
+        ) from err
 
     destino = ruta_segura(raiz, limpio)
     if destino.exists():
