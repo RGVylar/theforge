@@ -205,12 +205,33 @@ class MeshReport:
         )
 
 
-def weld_vertices(tris: np.ndarray, tol: float = 1e-6) -> np.ndarray:
-    """Indices de vertice por triangulo (n, 3) fusionando puntos a distancia tol."""
+def to_indexed_mesh(
+    tris: np.ndarray, tol: float = 1e-6
+) -> tuple[np.ndarray, np.ndarray]:
+    """Malla en soup (n, 3, 3) -> vertices unicos (v, 3) + caras (n, 3).
+
+    Fusiona puntos a distancia tol, igual que weld_vertices, pero ademas
+    devuelve las posiciones: hace falta para todo lo que opera por vertice en
+    vez de por triangulo (normales de vertice, desplazar una malla importada).
+    """
     pts = np.asarray(tris, dtype=float).reshape(-1, 3)
     keys = np.round(pts / tol).astype(np.int64)
-    _, inverse = np.unique(keys, axis=0, return_inverse=True)
-    return inverse.reshape(-1, 3)
+    # np.unique devuelve las salidas extra en el orden de su firma
+    # (return_index antes que return_inverse), no en el orden en que se
+    # pasen los kwargs: iban cambiadas y no fusionaba ningun vertice.
+    _, primero, inverse = np.unique(
+        keys, axis=0, return_index=True, return_inverse=True
+    )
+    # Las coordenadas originales del primer punto que cayo en cada celda, no
+    # las claves redondeadas: conserva la precision real de la malla.
+    vertices = pts[primero]
+    return vertices, inverse.reshape(-1, 3)
+
+
+def weld_vertices(tris: np.ndarray, tol: float = 1e-6) -> np.ndarray:
+    """Indices de vertice por triangulo (n, 3) fusionando puntos a distancia tol."""
+    _, faces = to_indexed_mesh(tris, tol=tol)
+    return faces
 
 
 def mesh_volume(tris: np.ndarray) -> float:

@@ -11,7 +11,9 @@ from theforge.stl import (
     grid_surface,
     mesh_volume,
     read_binary_stl,
+    to_indexed_mesh,
     triangle_normals,
+    weld_vertices,
     write_binary_stl,
 )
 
@@ -167,6 +169,25 @@ def test_check_mesh_detecta_triangulos_mal_orientados():
 def test_volumen_negativo_si_la_malla_esta_del_reves():
     malla = slab()[:, ::-1]
     assert mesh_volume(malla) < 0
+
+
+def test_to_indexed_mesh_fusiona_de_verdad():
+    """Regresion: np.unique devuelve return_index antes que return_inverse en
+    su firma, sin importar el orden de los kwargs. Con eso cambiado, la malla
+    no se fusionaba (cada esquina de cada triangulo quedaba como vertice
+    suelto) y check_mesh reportaba todo como abierto."""
+    malla = slab()  # 44 triangulos, pero solo 24 puntos 3D distintos
+    vertices, caras = to_indexed_mesh(malla)
+    assert len(vertices) == 24
+    assert caras.max() == 23
+    # Reconstruida desde los indices, es exactamente la misma malla.
+    assert vertices[caras] == pytest.approx(malla)
+
+
+def test_to_indexed_mesh_y_weld_vertices_coinciden():
+    malla = slab()
+    _, caras = to_indexed_mesh(malla)
+    assert np.array_equal(caras, weld_vertices(malla))
 
 
 def test_ida_y_vuelta_de_stl_binario(tmp_path):
