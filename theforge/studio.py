@@ -79,8 +79,12 @@ def nombre_seguro(nombre: str) -> str:
     Quedarse con el ultimo tramo de "../secreto.png" y guardarlo como
     "secreto.png" seria hacer algo distinto de lo que se pidio sin decirlo.
     Si el cliente manda una ruta en vez de un nombre, es un error suyo.
+
+    Llega percent-encoded porque las cabeceras HTTP solo admiten latin-1 y los
+    nombres de fichero traen acentos, enes y a veces emoji. Sobre un nombre
+    ASCII, desescapar no cambia nada.
     """
-    crudo = (nombre or "").strip()
+    crudo = urllib.parse.unquote((nombre or "").strip())
     if not crudo or crudo != Path(crudo).name or crudo.startswith("."):
         raise ErrorPeticion(f"nombre de fichero invalido: {nombre!r}")
     if Path(crudo).suffix.lower() not in EXTENSIONES_IMAGEN:

@@ -87,10 +87,25 @@ def test_una_ruta_dentro_de_la_raiz_se_admite(tmp_path):
     assert ruta_segura(tmp_path, "sub/foto.png").name == "foto.png"
 
 
-@pytest.mark.parametrize("malo", ["../x.png", "a/b.png", ".oculto.png", "script.py", ""])
+@pytest.mark.parametrize("malo", ["../x.png", "a/b.png", ".oculto.png", "script.py", "",
+                                  "..%2Fx.png", "a%2Fb.png"])
 def test_nombres_de_subida_invalidos(malo):
     with pytest.raises(ErrorPeticion):
         nombre_seguro(malo)
+
+
+@pytest.mark.parametrize(
+    "enviado,esperado",
+    [
+        ("foto.png", "foto.png"),
+        ("ni%C3%B1a%20con%20acento.png", "niña con acento.png"),
+        ("caf%C3%A9.JPG", "café.JPG"),
+    ],
+)
+def test_los_nombres_llegan_percent_encoded(enviado, esperado):
+    """Las cabeceras HTTP solo admiten latin-1; un nombre con ñ hace que fetch
+    lance antes de salir del navegador. Por eso viaja codificado."""
+    assert nombre_seguro(enviado) == esperado
 
 
 def test_el_proyecto_no_puede_apuntar_fuera(cliente):
@@ -299,6 +314,18 @@ def test_subir_algo_que_no_es_imagen(cliente, raiz):
     assert estado == HTTPStatus.BAD_REQUEST
     assert "imagen" in json.loads(cuerpo)["error"]
     assert not (raiz / "falsa.png").exists()
+
+
+def test_subir_con_nombre_con_acentos(cliente, raiz):
+    buffer = io.BytesIO()
+    Image.new("L", (12, 8), 0).save(buffer, format="PNG")
+    estado, _, cuerpo = cliente(
+        "POST", "/api/subir", buffer.getvalue(),
+        {"X-Nombre-Fichero": "ni%C3%B1a%20cumplea%C3%B1os.png"},
+    )
+    assert estado == HTTPStatus.OK
+    assert json.loads(cuerpo)["path"] == "niña cumpleaños.png"
+    assert (raiz / "niña cumpleaños.png").is_file()
 
 
 def test_subir_con_nombre_peligroso(cliente):

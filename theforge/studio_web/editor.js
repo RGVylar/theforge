@@ -424,7 +424,12 @@ $("pattern").onchange = () => {
     proyecto.background = { gray: parseInt($("gray").value, 10) };
   }
   mostrarControlesFondo();
-  if (proyecto.background.image === "") return;  // aun sin elegir imagen
+  if (proyecto.background.image === "") {
+    // Sin imagen elegida no hay nada que pedir al servidor, pero decirlo evita
+    // que parezca que el desplegable no ha hecho nada.
+    $("estado").textContent = "elige una imagen de fondo o impórtala del disco";
+    return;
+  }
   refrescar();
 };
 $("gray").onchange = () => {
@@ -452,32 +457,47 @@ $("fondo-mirror").onchange = actualizarFondoImagen;
 
 $("subir-fondo").onchange = async (ev) => {
   const fichero = ev.target.files[0];
-  if (!fichero) return;
-  $("estado").textContent = "subiendo el fondo…";
-  const r = await fetch("/api/subir", {
-    method: "POST", headers: { "X-Nombre-Fichero": fichero.name }, body: fichero,
-  });
-  const datos = await r.json();
-  if (!r.ok) { $("estado").textContent = "error: " + datos.error; return; }
-  await recargarImagenes();
-  $("fondo-imagen").value = datos.path;
-  actualizarFondoImagen();
   ev.target.value = "";
+  if (!fichero) return;
+  const ruta = await subirImagen(fichero);
+  if (!ruta) return;
+  await recargarImagenes();
+  $("fondo-imagen").value = ruta;
+  actualizarFondoImagen();
 };
+
+// Sube un fichero y devuelve su ruta, o null si algo falla (ya avisado).
+// Cualquier fallo tiene que acabar en pantalla: un manejador async que revienta
+// deja un rechazo no capturado y, desde fuera, parece que el boton no hace nada.
+async function subirImagen(fichero) {
+  $("estado").textContent = "subiendo…";
+  try {
+    const r = await fetch("/api/subir", {
+      method: "POST",
+      // Las cabeceras HTTP solo admiten latin-1: un nombre con ñ, acentos o
+      // emoji hace que fetch lance antes de salir. Se manda codificado.
+      headers: { "X-Nombre-Fichero": encodeURIComponent(fichero.name) },
+      body: fichero,
+    });
+    const datos = await r.json();
+    if (!r.ok) throw new Error(datos.error || `${r.status} ${r.statusText}`);
+    $("estado").textContent = "importada " + datos.path;
+    return datos.path;
+  } catch (err) {
+    $("estado").textContent = "no se pudo importar: " + err.message;
+    return null;
+  }
+}
 
 $("anadir").onchange = (e) => { if (e.target.value) { anadirCapa(e.target.value); e.target.value = ""; } };
 $("subir").onchange = async (ev) => {
   const fichero = ev.target.files[0];
-  if (!fichero) return;
-  $("estado").textContent = "subiendo…";
-  const r = await fetch("/api/subir", {
-    method: "POST", headers: { "X-Nombre-Fichero": fichero.name }, body: fichero,
-  });
-  const datos = await r.json();
-  if (!r.ok) { $("estado").textContent = "error: " + datos.error; return; }
-  await recargarImagenes(datos.path);
-  anadirCapa(datos.path);
   ev.target.value = "";
+  if (!fichero) return;
+  const ruta = await subirImagen(fichero);
+  if (!ruta) return;
+  await recargarImagenes(ruta);
+  anadirCapa(ruta);
 };
 
 $("capa-scale").oninput = () => {
