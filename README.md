@@ -308,6 +308,16 @@ Ejemplo completo, con una forma de huevo escrita a mano (no generada por
 `lito.py`, a propósito) en
 [examples/emboss_demo.py](examples/emboss_demo.py).
 
+**También desde el editor**, en el desplegable **Origen de la pieza** → `Importar
+STL`. Cambia el panel entero: forma/fondo/capas desaparecen (no aplican a un
+modelo ya existente) y solo queda un STL base + una foto + los controles del
+medallón. Como el relieve no sale de una banda 2D sino de desplazar vértices
+directamente, las pestañas Banda/Encendida no tienen sentido aquí —solo
+**3D**— y **Exportar STL** llama a `/api/emboss` en vez de a `/api/stl`.
+Guardar/cargar proyecto también funciona en este modo: el JSON lleva
+`"mode": "emboss"` para que cargarlo vuelva a este mismo panel en vez del de
+componer formas.
+
 ### El editor local
 
 ```bash
@@ -328,6 +338,9 @@ importes.
 | `POST /api/stl` | proyecto → STL binario, **409 si la malla no es cerrada** |
 | `POST /api/subir` | guarda una imagen en la carpeta raíz |
 | `GET /api/imagen?path=` | sirve una imagen del proyecto (miniaturas y proporciones) |
+| `GET /api/stls` | STL de la carpeta raíz, para el modo «Importar STL» |
+| `POST /api/subir_stl` | guarda un STL, comprobando que se puede leer como STL binario |
+| `POST /api/emboss` | modelo + foto → STL grabado, **409 si no es cerrada** |
 
 En el editor: arrastras las fotos sobre la banda, rueda para escalar, `Supr`
 para borrar, y la lista de la derecha permite reordenarlas (la última se pinta

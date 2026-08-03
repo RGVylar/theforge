@@ -36,6 +36,16 @@ let proyecto = {
   layers: [],
 };
 
+// Estado del modo "Importar STL": no encaja en el esquema de `proyecto`
+// (compose.py) porque no hay forma/fondo/capas, es un modelo ya existente +
+// una foto + los parametros de emboss.py. Mismos nombres que EmbossParams.
+let emboss = {
+  model: "", image: "",
+  min_bump: 0.0, max_bump: 1.2, gamma: 1.0, invert: false,
+  center_lat_deg: 0, center_lon_deg: 0, height_deg: 60, feather_deg: 6,
+};
+let modoPieza = "generar";  // "generar" | "importar"
+
 let seleccion = -1;
 let vista = "banda";
 let visor = null;
@@ -87,7 +97,20 @@ function pedirRefresco(ms = 220) {
   temporizador = setTimeout(refrescar, ms);
 }
 
+// Cada llamada a refrescar()/refrescarEmboss() se numera, y antes de aplicar
+// CUALQUIER resultado se comprueba que su numero siga siendo el mas reciente.
+// Sin esto, cambiar de modo (o de pestana, o arrastrar un slider) dispara una
+// peticion nueva mientras una anterior sigue en vuelo; si la vieja responde
+// mas tarde que la nueva -nada garantiza el orden de llegada de dos fetch en
+// paralelo- pisaria el resultado bueno con uno obsoleto. Se vio en real: al
+// cambiar de "importar STL" a "generar forma" y volver a cargar un proyecto
+// de emboss en menos de un segundo, el visor se quedaba con una esfera de una
+// prueba anterior en vez del STL recien cargado.
+let peticionActual = 0;
+
 async function refrescar() {
+  const miPeticion = ++peticionActual;
+  if (modoPieza === "importar") return refrescarEmboss(miPeticion);
   decir("generando…");
   $("avisos").textContent = "";
   try {
@@ -99,6 +122,7 @@ async function refrescar() {
       const ligero = structuredClone(proyecto);
       ligero.shape.samples = Math.min(proyecto.shape.samples, 320);
       const buffer = await (await pedir("/api/stl", ligero)).arrayBuffer();
+      if (miPeticion !== peticionActual) return;  // hay algo mas nuevo en marcha
       const malla = visor.cargar(buffer);
       decir(`${malla.triangulos.toLocaleString("es")} triángulos  ·  ` +
         `caja ${malla.max.map((m, i) => (m - malla.min[i]).toFixed(0)).join(" × ")} mm`);
@@ -106,11 +130,13 @@ async function refrescar() {
     }
 
     const r = await pedir("/api/" + vista, proyecto);
+    if (miPeticion !== peticionActual) return;
     const anterior = $("vista").src;
     $("vista").src = URL.createObjectURL(await r.blob());
     if (anterior.startsWith("blob:")) URL.revokeObjectURL(anterior);
 
     const info = await (await pedir("/api/info", proyecto)).json();
+    if (miPeticion !== peticionActual) return;
     const e = info.esfera;
     decir(
       `${info.superficie_mm.ancho} × ${info.superficie_mm.alto} mm` +
@@ -121,7 +147,94 @@ async function refrescar() {
     );
     $("avisos").textContent = (info.avisos || []).join("\n");
   } catch (err) {
+    if (miPeticion !== peticionActual) return;
     decir("error: " + err.message, true);
+  }
+}
+
+// El modo importar no tiene banda ni samples: la resolucion del relieve la
+// fija el propio STL de origen, asi que aqui no hay nada que aligerar para el
+// visor -se pide directamente el resultado final, sea el tamano que sea.
+// `miPeticion` la asigna refrescar(): ver el comentario junto a peticionActual.
+async function refrescarEmboss(miPeticion) {
+  $("avisos").textContent = "";
+  if (!emboss.model || !emboss.image) {
+    decir("elige un STL base y una foto");
+    return;
+  }
+  decir("grabando…");
+  try {
+    const buffer = await (await pedir("/api/emboss", { version: 1, ...emboss })).arrayBuffer();
+    if (miPeticion !== peticionActual) return;
+    const malla = visor.cargar(buffer);
+    decir(`${malla.triangulos.toLocaleString("es")} triángulos  ·  ` +
+      `caja ${malla.max.map((m, i) => (m - malla.min[i]).toFixed(0)).join(" × ")} mm`);
+  } catch (err) {
+    if (miPeticion !== peticionActual) return;
+    decir("error: " + err.message, true);
+  }
+}
+
+// --- modo importar STL ------------------------------------------------------
+
+// Cambia entre "generar forma" (banda + capas) e "importar STL" (un modelo +
+// una foto + medallon). Los dos modos no comparten ni panel ni pestanas:
+// banda/encendida no significan nada sobre un STL importado, solo hay 3D.
+function cambiarModo(modo, { refrescarAhora = true } = {}) {
+  modoPieza = modo;
+  const esImportar = modo === "importar";
+  $("panel-generar").hidden = esImportar;
+  $("panel-importar").hidden = !esImportar;
+  $("capas").hidden = esImportar;
+  document
+    .querySelectorAll('.pestanas button[data-vista="banda"], .pestanas button[data-vista="encendida"]')
+    .forEach((b) => { b.hidden = esImportar; });
+  if (esImportar) {
+    vista = "modelo";
+    document.querySelectorAll(".pestanas button").forEach((b) =>
+      b.setAttribute("aria-selected", String(b.dataset.vista === "modelo")));
+    $("envoltorio-banda").hidden = true;
+    $("visor").hidden = false;
+  }
+  if (refrescarAhora) refrescar();
+}
+
+function sincronizarEmboss() {
+  $("modelo-stl").value = emboss.model;
+  $("modelo-foto").value = emboss.image;
+  $("emboss-min").value = emboss.min_bump;
+  $("emboss-max").value = emboss.max_bump;
+  $("emboss-gamma").value = emboss.gamma;
+  $("emboss-invert").checked = emboss.invert;
+  $("emboss-lat").value = emboss.center_lat_deg;
+  $("emboss-lon").value = emboss.center_lon_deg;
+  $("emboss-height").value = emboss.height_deg;
+  $("emboss-feather").value = emboss.feather_deg;
+}
+
+async function cargarSTLs(seleccionado) {
+  const { stls } = await (await fetch("/api/stls")).json();
+  $("modelo-stl").innerHTML = '<option value="">(elegir STL…)</option>' +
+    stls.map((n) => `<option>${n}</option>`).join("");
+  if (seleccionado) $("modelo-stl").value = seleccionado;
+}
+
+// Sube un STL y devuelve su ruta, o null si algo falla (ya avisado en pantalla).
+async function subirSTL(fichero) {
+  decir(`subiendo ${fichero.name} (${Math.round(fichero.size / 1024)} kB)…`);
+  try {
+    const r = await fetch("/api/subir_stl", {
+      method: "POST",
+      headers: { "X-Nombre-Fichero": encodeURIComponent(fichero.name) },
+      body: fichero,
+    });
+    const datos = await r.json();
+    if (!r.ok) throw new Error(datos.error || `${r.status} ${r.statusText}`);
+    decir(`importado ${datos.path} (${datos.triangulos.toLocaleString("es")} triángulos)`);
+    return datos.path;
+  } catch (err) {
+    decir("no se pudo importar: " + err.message, true);
+    return null;
   }
 }
 
@@ -327,7 +440,13 @@ function cambiarForma(curva) {
 // --- proyecto -------------------------------------------------------------
 
 function guardarProyecto() {
-  const blob = new Blob([JSON.stringify(proyecto, null, 2)], { type: "application/json" });
+  // Un JSON de emboss lleva "mode":"emboss" para que cargarProyecto sepa a que
+  // panel volver; el de compose.py no lleva "mode" porque ese campo no es
+  // suyo, es puramente de este frontend para distinguir los dos guardados.
+  const datos = modoPieza === "importar"
+    ? { version: 1, mode: "emboss", ...emboss }
+    : proyecto;
+  const blob = new Blob([JSON.stringify(datos, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   Object.assign(document.createElement("a"), { href: url, download: "proyecto.json" }).click();
   URL.revokeObjectURL(url);
@@ -338,8 +457,23 @@ async function cargarProyecto(fichero) {
   try {
     const datos = JSON.parse(await fichero.text());
     if (datos.version !== 1) throw new Error(`versión ${datos.version} no soportada`);
+
+    if (datos.mode === "emboss") {
+      const { mode, version, ...resto } = datos;
+      emboss = { ...emboss, ...resto };
+      $("modo-pieza").value = "importar";
+      cambiarModo("importar", { refrescarAhora: false });
+      await cargarSTLs(emboss.model);
+      await recargarImagenes();
+      sincronizarEmboss();
+      await refrescar();
+      return;
+    }
+
     proyecto = datos;
     seleccion = proyecto.layers.length ? 0 : -1;
+    $("modo-pieza").value = "generar";
+    cambiarModo("generar", { refrescarAhora: false });
     $("curve").value = proyecto.shape.curve;
     sincronizarPanel();
     await refrescar();
@@ -353,7 +487,9 @@ async function cargarProyecto(fichero) {
 async function exportar() {
   decir("construyendo y comprobando la malla…");
   try {
-    const r = await pedir("/api/stl", proyecto);
+    const ruta = modoPieza === "importar" ? "/api/emboss" : "/api/stl";
+    const cuerpo = modoPieza === "importar" ? { version: 1, ...emboss } : proyecto;
+    const r = await pedir(ruta, cuerpo);
     const url = URL.createObjectURL(await r.blob());
     Object.assign(document.createElement("a"), { href: url, download: "pieza.stl" }).click();
     URL.revokeObjectURL(url);
@@ -404,13 +540,16 @@ async function inicio() {
   const acepta = est.extensiones.join(",");
   $("subir").accept = acepta;
   $("subir-fondo").accept = acepta;
+  $("subir-foto-emboss").accept = acepta;
   $("formatos-admitidos").textContent =
     `Formatos: ${est.extensiones.map((e) => e.slice(1)).join(", ")} · hasta 64 MB. ` +
     `Tras importar, el selector vuelve a «Ningún archivo» a propósito, ` +
     `para poder reimportar el mismo. Mira la barra de abajo.`;
 
   await recargarImagenes();
+  await cargarSTLs();
   sincronizarPanel();
+  sincronizarEmboss();
   visor = crearVisor($("visor"));
   instalarArrastre();
   await refrescar();
@@ -424,6 +563,9 @@ async function recargarImagenes(seleccionada) {
   const fondoActual = $("fondo-imagen").value;
   $("fondo-imagen").innerHTML = '<option value="">(elegir imagen…)</option>' + opciones;
   $("fondo-imagen").value = fondoActual;
+  const fotoActual = $("modelo-foto").value;
+  $("modelo-foto").innerHTML = '<option value="">(elegir imagen…)</option>' + opciones;
+  $("modelo-foto").value = fotoActual;
   if (seleccionada) $("anadir").value = seleccionada;
 }
 
@@ -566,6 +708,57 @@ $("btn-guardar").onclick = guardarProyecto;
 $("btn-cargar").onclick = () => $("fichero-proyecto").click();
 $("fichero-proyecto").onchange = (ev) => ev.target.files[0] && cargarProyecto(ev.target.files[0]);
 $("btn-exportar").onclick = exportar;
+
+$("modo-pieza").onchange = () => cambiarModo($("modo-pieza").value);
+
+$("modelo-stl").onchange = () => {
+  emboss.model = $("modelo-stl").value;
+  refrescar();
+};
+$("subir-stl").onchange = async (ev) => {
+  const fichero = ev.target.files[0];
+  ev.target.value = "";
+  if (!fichero) return;
+  const ruta = await subirSTL(fichero);
+  if (!ruta) return;
+  await cargarSTLs(ruta);
+  emboss.model = ruta;
+  refrescar();
+};
+
+$("modelo-foto").onchange = () => {
+  emboss.image = $("modelo-foto").value;
+  refrescar();
+};
+$("subir-foto-emboss").onchange = async (ev) => {
+  const fichero = ev.target.files[0];
+  ev.target.value = "";
+  if (!fichero) return;
+  const ruta = await subirImagen(fichero);
+  if (!ruta) return;
+  await recargarImagenes();
+  emboss.image = ruta;
+  $("modelo-foto").value = ruta;
+  refrescar();
+};
+
+function actualizarEmboss() {
+  emboss.min_bump = parseFloat($("emboss-min").value);
+  emboss.max_bump = parseFloat($("emboss-max").value);
+  emboss.gamma = parseFloat($("emboss-gamma").value);
+  emboss.invert = $("emboss-invert").checked;
+  emboss.center_lat_deg = parseFloat($("emboss-lat").value);
+  emboss.center_lon_deg = parseFloat($("emboss-lon").value);
+  emboss.height_deg = parseFloat($("emboss-height").value);
+  emboss.feather_deg = parseFloat($("emboss-feather").value);
+  refrescar();
+}
+// onchange, no oninput: grabar un STL puede ser bastante mas caro que
+// regenerar una banda, y aqui no hay debounce -mejor esperar a soltar.
+for (const id of ["emboss-min", "emboss-max", "emboss-gamma", "emboss-invert",
+                   "emboss-lat", "emboss-lon", "emboss-height", "emboss-feather"]) {
+  $(id).onchange = actualizarEmboss;
+}
 
 document.querySelectorAll(".pestanas button").forEach((boton) => {
   boton.onclick = () => {

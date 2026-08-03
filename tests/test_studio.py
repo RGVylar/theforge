@@ -24,10 +24,20 @@ from theforge.studio import EXTENSIONES_IMAGEN, ErrorPeticion, crear_servidor, n
 
 @pytest.fixture
 def raiz(tmp_path):
-    """Carpeta de proyecto con una foto dentro."""
+    """Carpeta de proyecto con una foto y un STL hueco dentro."""
     Image.new("L", (60, 60), 0).save(tmp_path / "foto.png")
     (tmp_path / "sub").mkdir()
     Image.new("L", (40, 40), 128).save(tmp_path / "sub" / "otra.png")
+
+    from theforge.lito import LitoParams, lithophane
+    from theforge.stl import write_binary_stl
+
+    esfera = lithophane(
+        Image.new("L", (4, 4), 255),
+        LitoParams(curve="sphere", diameter_mm=60, samples=40,
+                   min_thickness=1.2, max_thickness=1.3, cap_top=True),
+    )
+    write_binary_stl(tmp_path / "base.stl", esfera)
     return tmp_path
 
 
@@ -380,3 +390,129 @@ def test_subir_con_nombre_peligroso(cliente):
 def test_la_carpeta_raiz_tiene_que_existir(tmp_path):
     with pytest.raises(ValueError, match="no existe"):
         crear_servidor(tmp_path / "no_existe", puerto=0)
+
+
+# --------------------------------------------------------------------------
+# Importar STL y grabar (forge emboss desde la UI)
+# --------------------------------------------------------------------------
+
+
+def proyecto_emboss(model="base.stl", image="foto.png", **params):
+    return {"version": 1, "model": model, "image": image, **params}
+
+
+def test_listar_stls(cliente):
+    _, _, cuerpo = cliente("GET", "/api/stls")
+    assert json.loads(cuerpo)["stls"] == ["base.stl"]
+
+
+def test_subir_stl_valido(cliente, raiz):
+    from theforge.stl import write_binary_stl
+
+    from theforge.lito import LitoParams, lithophane
+
+    cubo = lithophane(
+        Image.new("L", (4, 4), 255),
+        LitoParams(curve="flat", width_mm=20, samples=10,
+                   min_thickness=1.0, max_thickness=1.2),
+    )
+    ruta_temp = raiz / "_temp_subida.stl"
+    write_binary_stl(ruta_temp, cubo)
+    cuerpo_stl = ruta_temp.read_bytes()
+    ruta_temp.unlink()
+
+    estado, _, cuerpo = cliente(
+        "POST", "/api/subir_stl", cuerpo_stl, {"X-Nombre-Fichero": "importado.stl"}
+    )
+    assert estado == HTTPStatus.OK
+    datos = json.loads(cuerpo)
+    assert datos["path"] == "importado.stl"
+    assert datos["triangulos"] == len(cubo)
+    assert (raiz / "importado.stl").is_file()
+
+
+def test_subir_stl_que_no_es_stl_de_verdad(cliente, raiz):
+    estado, _, cuerpo = cliente(
+        "POST", "/api/subir_stl", b"esto no es un stl", {"X-Nombre-Fichero": "falso.stl"}
+    )
+    assert estado == HTTPStatus.BAD_REQUEST
+    assert "STL" in json.loads(cuerpo)["error"]
+    assert not (raiz / "falso.stl").is_file()  # no deja basura
+
+
+def test_subir_stl_extension_no_admitida(cliente):
+    estado, _, _ = cliente(
+        "POST", "/api/subir_stl", b"x", {"X-Nombre-Fichero": "modelo.obj"}
+    )
+    assert estado == HTTPStatus.BAD_REQUEST
+
+
+def test_emboss_devuelve_un_stl_binario_cerrado(cliente):
+    estado, cabeceras, cuerpo = cliente(
+        "POST", "/api/emboss",
+        proyecto_emboss(max_bump=1.0, height_deg=50, feather_deg=5),
+    )
+    assert estado == HTTPStatus.OK
+    assert cabeceras["Content-Type"] == "application/octet-stream"
+    assert "attachment" in cabeceras["Content-Disposition"]
+    (cuantos,) = struct.unpack("<I", cuerpo[80:84])
+    assert len(cuerpo) == 84 + cuantos * 50
+
+
+def test_emboss_cambia_la_malla_de_verdad(cliente, raiz):
+    """No basta con que devuelva un STL: tiene que ser DISTINTO del modelo
+    base, o el grabado no esta haciendo nada."""
+    from theforge.stl import read_binary_stl
+
+    base = read_binary_stl(raiz / "base.stl")
+    _, _, cuerpo = cliente(
+        "POST", "/api/emboss",
+        proyecto_emboss(max_bump=1.0, height_deg=50, feather_deg=5),
+    )
+    (raiz / "_resultado.stl").write_bytes(cuerpo)
+    resultado = read_binary_stl(raiz / "_resultado.stl")
+    assert resultado.shape == base.shape  # misma topologia
+    assert not np.allclose(resultado, base)  # pero desplazada
+
+
+@pytest.mark.parametrize(
+    "romper,esperado",
+    [
+        (lambda p: p.update(version=2), "version"),
+        (lambda p: p.pop("model"), "model"),
+        (lambda p: p.update(model="no_existe.stl"), "no existe"),
+        (lambda p: p.update(image="no_existe.png"), "no existe"),
+        (lambda p: p.update(model="../fuera.stl"), "fuera"),
+        (lambda p: p.update(max_bump=-5), "max_bump"),
+        (lambda p: p.update(estilo_inventado="acanthus"), "desconocido"),
+    ],
+)
+def test_emboss_proyecto_invalido(cliente, romper, esperado):
+    proyecto = proyecto_emboss()
+    romper(proyecto)
+    estado, _, cuerpo = cliente("POST", "/api/emboss", proyecto)
+    assert estado == HTTPStatus.BAD_REQUEST
+    assert esperado in json.loads(cuerpo)["error"]
+
+
+def test_emboss_no_exporta_si_el_modelo_de_origen_ya_estaba_roto(cliente, raiz):
+    """emboss desplaza vertices sin tocar la conectividad: si el STL de
+    origen ya tenia un agujero, el grabado hereda ese mismo agujero -no lo
+    arregla ni lo empeora-, y el servidor debe negarse a exportarlo igual que
+    con api_stl. (Un bulto enorme, en cambio, NO dispara esto: el
+    desplazamiento puro nunca abre aristas por si mismo, solo podria causar
+    auto-interseccion, que check_mesh no sabe ver -esta documentado en
+    emboss.py-, asi que la unica forma real de llegar al 409 es que el
+    origen ya estuviera mal.)"""
+    from theforge.stl import write_binary_stl
+
+    from tests.test_stl import slab
+
+    roto = slab()[:-1]  # le falta un triangulo: abierta a proposito
+    write_binary_stl(raiz / "roto.stl", roto)
+
+    estado, _, cuerpo = cliente(
+        "POST", "/api/emboss", proyecto_emboss(model="roto.stl", max_bump=0.5),
+    )
+    assert estado == HTTPStatus.CONFLICT
+    assert "cerrada" in json.loads(cuerpo)["error"]

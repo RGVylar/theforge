@@ -89,7 +89,7 @@ def ruta_segura(raiz: Path, relativa: str) -> Path:
     return destino
 
 
-def nombre_seguro(nombre: str) -> str:
+def nombre_seguro(nombre: str, extensiones: frozenset[str] = EXTENSIONES_IMAGEN) -> str:
     """Nombre de fichero para lo que se sube. Rechaza, no sanea.
 
     Quedarse con el ultimo tramo de "../secreto.png" y guardarlo como
@@ -103,9 +103,23 @@ def nombre_seguro(nombre: str) -> str:
     crudo = urllib.parse.unquote((nombre or "").strip())
     if not crudo or crudo != Path(crudo).name or crudo.startswith("."):
         raise ErrorPeticion(f"nombre de fichero invalido: {nombre!r}")
-    if Path(crudo).suffix.lower() not in EXTENSIONES_IMAGEN:
+    if Path(crudo).suffix.lower() not in extensiones:
         raise ErrorPeticion(f"extension no admitida: {nombre!r}")
     return crudo
+
+
+def _ruta_disponible(raiz: Path, nombre: str) -> Path:
+    """Como ruta_segura, pero si `nombre` ya existe anade -2, -3... antes de
+    la extension en vez de pisar el fichero que hubiera."""
+    destino = ruta_segura(raiz, nombre)
+    if not destino.exists():
+        return destino
+    tallo, sufijo = destino.stem, destino.suffix
+    for i in range(2, 1000):
+        candidato = ruta_segura(raiz, f"{tallo}-{i}{sufijo}")
+        if not candidato.exists():
+            return candidato
+    raise ErrorPeticion(f"demasiadas copias de {nombre!r}")
 
 
 # --------------------------------------------------------------------------
@@ -225,17 +239,28 @@ def api_info(datos: dict, raiz: Path, ancho_px: int) -> dict:
     return info
 
 
+def _bytes_stl(malla) -> bytes:
+    """Serializa una malla (n, 3, 3) a STL binario, con las normales
+    recalculadas. Lo comparten api_stl y api_emboss."""
+    from theforge.stl import STL_TRIANGLE
+    import struct
+
+    import numpy as np
+
+    tris = np.asarray(malla, dtype=np.float32)
+    registros = np.zeros(len(tris), dtype=STL_TRIANGLE)
+    registros["vertices"] = tris
+    registros["normal"] = triangle_normals(tris)
+    cabecera = b"theforge studio".ljust(80, b" ")
+    return cabecera + struct.pack("<I", len(registros)) + registros.tobytes()
+
+
 def api_stl(datos: dict, raiz: Path, ancho_px: int) -> bytes:
     """Construye la malla y se niega a devolverla si no es cerrada.
 
     Esta es la razon de que exportar pase por el servidor y no por el navegador:
     el unico sitio donde se puede comprobar la malla es donde se construye.
     """
-    from theforge.stl import STL_TRIANGLE
-    import struct
-
-    import numpy as np
-
     comp = _composicion(datos, raiz)
     malla = build_mesh(comp, width_px=ancho_px)
     informe = check_mesh(malla)
@@ -244,13 +269,65 @@ def api_stl(datos: dict, raiz: Path, ancho_px: int) -> bytes:
             f"la malla no es cerrada y no se exporta: {informe}",
             estado=HTTPStatus.CONFLICT,
         )
+    return _bytes_stl(malla)
 
-    tris = np.asarray(malla, dtype=np.float32)
-    registros = np.zeros(len(tris), dtype=STL_TRIANGLE)
-    registros["vertices"] = tris
-    registros["normal"] = triangle_normals(tris)
-    cabecera = b"theforge studio".ljust(80, b" ")
-    return cabecera + struct.pack("<I", len(registros)) + registros.tobytes()
+
+def _emboss_composicion(datos: dict, raiz: Path):
+    """Valida el cuerpo de /api/emboss y devuelve (modelo, imagen, params)."""
+    from theforge.emboss import EmbossParams
+
+    if not isinstance(datos, dict):
+        raise ErrorPeticion("se esperaba un objeto JSON")
+    if datos.get("version") != 1:
+        raise ErrorPeticion(f"version {datos.get('version')!r} no soportada, se espera 1")
+    if "model" not in datos or "image" not in datos:
+        raise ErrorPeticion("faltan 'model' o 'image'")
+
+    modelo = ruta_segura(raiz, datos["model"])
+    imagen = ruta_segura(raiz, datos["image"])
+    if not modelo.is_file():
+        raise ErrorPeticion(f"no existe el modelo: {datos['model']}")
+    if not imagen.is_file():
+        raise ErrorPeticion(f"no existe la imagen: {datos['image']}")
+
+    resto = {k: v for k, v in datos.items() if k not in ("version", "model", "image")}
+    try:
+        params = EmbossParams(**resto)
+    except TypeError as err:
+        raise ErrorPeticion(f"parametro desconocido o que falta: {err}") from err
+    try:
+        params.validate()
+    except ValueError as err:
+        raise ErrorPeticion(str(err)) from err
+    return modelo, imagen, params
+
+
+def api_emboss(datos: dict, raiz: Path) -> bytes:
+    """Graba la foto sobre el STL y se niega a devolverla si no es cerrada.
+
+    La resolucion del relieve la fija el propio STL de origen (su numero de
+    vertices), asi que a diferencia de api_stl aqui no hay un ancho_px que
+    pedir: no hay raster que generar, solo desplazar los vertices que ya hay.
+    """
+    from theforge.emboss import emboss_stl
+
+    modelo, imagen, params = _emboss_composicion(datos, raiz)
+    malla = emboss_stl(modelo, imagen, params)
+    informe = check_mesh(malla)
+    if not informe.watertight:
+        raise ErrorPeticion(
+            f"la malla grabada no es cerrada y no se exporta: {informe}",
+            estado=HTTPStatus.CONFLICT,
+        )
+    return _bytes_stl(malla)
+
+
+def api_stls(raiz: Path) -> dict:
+    """STL disponibles en la carpeta del proyecto, para elegir como base."""
+    encontrados = sorted(
+        p.relative_to(raiz).as_posix() for p in raiz.rglob("*.stl") if p.is_file()
+    )
+    return {"stls": encontrados}
 
 
 def api_subir(nombre: str, cuerpo: bytes, raiz: Path) -> dict:
@@ -272,18 +349,37 @@ def api_subir(nombre: str, cuerpo: bytes, raiz: Path) -> dict:
             f"({len(cuerpo)} bytes). Prueba a reexportarla como PNG o JPG."
         ) from err
 
-    destino = ruta_segura(raiz, limpio)
-    if destino.exists():
-        raiz_nombre, sufijo = destino.stem, destino.suffix
-        for i in range(2, 1000):
-            candidato = ruta_segura(raiz, f"{raiz_nombre}-{i}{sufijo}")
-            if not candidato.exists():
-                destino = candidato
-                break
+    destino = _ruta_disponible(raiz, limpio)
     destino.write_bytes(cuerpo)
     with Image.open(destino) as abierta:
         ancho, alto = abierta.size
     return {"path": destino.relative_to(raiz.resolve()).as_posix(), "ancho": ancho, "alto": alto}
+
+
+def api_subir_stl(nombre: str, cuerpo: bytes, raiz: Path) -> dict:
+    """Guarda un STL en la carpeta del proyecto, tras comprobar que se puede
+    leer como STL binario. No comprueba que sea watertight ni que sea hueco
+    -eso no se puede saber barato desde el fichero-, solo que el formato es
+    valido."""
+    import struct
+
+    from theforge.stl import read_binary_stl
+
+    limpio = nombre_seguro(nombre, extensiones=frozenset({".stl"}))
+    if not cuerpo:
+        raise ErrorPeticion(f"{limpio}: no ha llegado ningun dato")
+
+    destino = _ruta_disponible(raiz, limpio)
+    destino.write_bytes(cuerpo)
+    try:
+        tris = read_binary_stl(destino)
+    except (ValueError, struct.error) as err:
+        destino.unlink()
+        raise ErrorPeticion(f"{limpio}: no se pudo leer como STL binario ({err})") from err
+    return {
+        "path": destino.relative_to(raiz.resolve()).as_posix(),
+        "triangulos": len(tris),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -363,6 +459,8 @@ class Manejador(BaseHTTPRequestHandler):
                 return self._json(api_estilos())
             if ruta == "/api/imagenes":
                 return self._json(api_imagenes(self.config.raiz))
+            if ruta == "/api/stls":
+                return self._json(api_stls(self.config.raiz))
             if ruta == "/api/imagen":
                 consulta = urllib.parse.parse_qs(
                     self.path.split("?", 1)[1] if "?" in self.path else ""
@@ -410,6 +508,16 @@ class Manejador(BaseHTTPRequestHandler):
             if ruta == "/api/subir":
                 nombre = self.headers.get("X-Nombre-Fichero", "")
                 return self._json(api_subir(nombre, crudo, cfg.raiz))
+            if ruta == "/api/subir_stl":
+                nombre = self.headers.get("X-Nombre-Fichero", "")
+                return self._json(api_subir_stl(nombre, crudo, cfg.raiz))
+            if ruta == "/api/emboss":
+                cuerpo = api_emboss(self._proyecto(crudo), cfg.raiz)
+                return self._responder(
+                    cuerpo,
+                    "application/octet-stream",
+                    cabeceras={"Content-Disposition": 'attachment; filename="pieza.stl"'},
+                )
             return self._error("endpoint desconocido", HTTPStatus.NOT_FOUND)
         except ErrorPeticion as err:
             return self._error(str(err), err.estado)
