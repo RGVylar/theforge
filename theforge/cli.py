@@ -357,6 +357,96 @@ def cmd_compose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_emboss_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "emboss",
+        help="graba una foto en relieve sobre un STL cualquiera, como un medallon",
+        description="Estampa una imagen sobre la superficie de un STL ya existente, en "
+        "vez de generar la forma desde cero. AVISO: solo funciona como litofania de "
+        "verdad si el STL que importas ya es una cascara hueca de pared fina; grabar "
+        "relieve en la superficie de un solido macizo no deja pasar la luz por dentro, "
+        "por mucho relieve que tenga por fuera. No hay forma barata de comprobar esto "
+        "desde el propio fichero, es responsabilidad de quien lo usa.",
+    )
+    p.add_argument("model", type=Path, help="STL de entrada (ya hueco y de pared fina)")
+    p.add_argument("image", type=Path, help="imagen a grabar")
+    p.add_argument("-o", "--output", type=Path, help="STL de salida (por defecto, junto al STL)")
+    p.add_argument(
+        "--min-bump", type=float, default=0.0, help="bulto de las zonas claras, mm (0.0)"
+    )
+    p.add_argument(
+        "--max-bump", type=float, default=1.2, help="bulto de las zonas oscuras, mm (1.2)"
+    )
+    p.add_argument("--gamma", type=float, default=1.0, help="correccion de gamma (1.0)")
+    p.add_argument("--invert", action="store_true", help="invierte el mapa: claro = bulto")
+    p.add_argument(
+        "--center-lat", type=float, default=0.0,
+        help="latitud del centro del medallon, grados (0)",
+    )
+    p.add_argument(
+        "--center-lon", type=float, default=0.0,
+        help="longitud del centro del medallon, grados; 0 mira hacia -Y (0)",
+    )
+    p.add_argument(
+        "--height", type=float, default=60.0, help="tamano del medallon en latitud, grados (60)"
+    )
+    p.add_argument(
+        "--feather", type=float, default=6.0,
+        help="desvanecido del borde del medallon, grados (6)",
+    )
+    p.add_argument("--no-check", action="store_true", help="no comprobar la malla")
+    p.set_defaults(func=cmd_emboss)
+
+
+def cmd_emboss(args: argparse.Namespace) -> int:
+    from theforge.emboss import EmbossParams, emboss_stl
+    from theforge.stl import read_binary_stl
+
+    params = EmbossParams(
+        min_bump=args.min_bump,
+        max_bump=args.max_bump,
+        gamma=args.gamma,
+        invert=args.invert,
+        center_lat_deg=args.center_lat,
+        center_lon_deg=args.center_lon,
+        height_deg=args.height,
+        feather_deg=args.feather,
+    )
+    params.validate()
+
+    salida = args.output or args.model.with_stem(args.model.stem + "_emboss")
+    original = read_binary_stl(args.model)
+
+    inicio = time.perf_counter()
+    malla = emboss_stl(args.model, args.image, params)
+    write_binary_stl(salida, malla, header=f"theforge emboss {args.model.name}")
+    tardanza = time.perf_counter() - inicio
+
+    print(f"modelo    {args.model} ({len(original)} triangulos de origen)")
+    print(f"medallon  {args.height:g}° de alto, centrado en lat {args.center_lat:g}° "
+          f"lon {args.center_lon:g}°, bulto {args.min_bump:g}-{args.max_bump:g} mm")
+    print(f"malla     {len(malla)} triangulos en {tardanza:.1f} s")
+    print(
+        "AVISO: esto solo funciona como litofania si el STL de origen ya es una "
+        "cascara hueca de pared fina; no se puede comprobar desde el fichero"
+    )
+
+    if not args.no_check:
+        informe = check_mesh(malla)
+        print(f"chequeo   {informe}")
+        if not informe.watertight:
+            print(
+                "ERROR: la malla no es cerrada. O el STL de origen no lo era, o el "
+                "bulto es tan grande que la superficie se pliega sobre si misma "
+                "(revisa --max-bump)",
+                file=sys.stderr,
+            )
+            return 1
+
+    print(f"salida    {salida}")
+    return 0
+
+
 def _add_studio_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "studio",
@@ -425,6 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_lito_parser(sub)
     _add_ornament_parser(sub)
     _add_compose_parser(sub)
+    _add_emboss_parser(sub)
     _add_studio_parser(sub)
     _add_tune_parser(sub)
     return parser

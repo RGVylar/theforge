@@ -15,10 +15,11 @@ Sin CAD pesado: la geometría se escribe a mano como STL binario con numpy. Las
 | `lito.py` | generador de litofanías (plana, cilíndrica y esférica) |
 | `ornament.py` | ornamento procedural y composición de bandas con medallón |
 | `compose.py` | proyectos de composición: JSON con forma + fondo + fotos colocadas |
+| `emboss.py` | graba una foto en relieve sobre un STL ya existente (cualquier producto) |
 | `preview.py` | simulación de la litofanía a contraluz (Beer-Lambert) |
 | `studio.py` | servidor local del editor: banda, contraluz, info y exportación |
 | `tuner.py` | ajuste interactivo de estilos con sliders (tkinter) |
-| `cli.py` | `forge lito ...`, `forge ornament ...`, `forge tune` |
+| `cli.py` | `forge lito ...`, `forge ornament ...`, `forge emboss ...`, `forge tune` |
 | resto del roadmap | sin empezar |
 
 ## Instalación
@@ -251,6 +252,61 @@ Ejemplo completo en [examples/compose_demo.py](examples/compose_demo.py).
 Este JSON es el documento del futuro editor web (`forge studio`, en el
 roadmap): el editor solo manipulará este fichero y la banda de píxeles que
 devuelve el backend, nunca recalculará geometría por su cuenta.
+
+### Grabar una foto sobre un STL cualquiera
+
+`forge lito` y `forge compose` generan la forma desde cero. `forge emboss` hace
+lo contrario: coge un STL que **ya existe** —un jarrón, una funda, un adorno
+descargado o diseñado aparte— y le graba la foto encima como un medallón en
+relieve, sin tocar el resto de la superficie.
+
+```bash
+python -m theforge emboss producto.stl retrato.jpg -o salida.stl \
+  --max-bump 1.2 --height 55 --center-lat 10
+```
+
+**Antes de nada, la condición que no es de software: para que funcione como
+litofanía de verdad, el STL de origen tiene que ser ya una cáscara hueca de
+pared fina.** Grabar relieve en la superficie de un sólido macizo no sirve de
+nada: la luz no atraviesa un bloque de PLA, por mucho relieve que tenga por
+fuera. No hay forma barata de comprobar esto mirando solo el fichero —un STL no
+dice si es hueco—, así que es responsabilidad de quien lo usa. `forge emboss`
+lo recuerda en cada ejecución.
+
+**Tampoco se puede añadir detalle que el STL de origen no tenga.** El relieve
+sale tan fino como la propia malla esté teselada: un modelo de baja resolución
+(pocos triángulos) da un relieve tosco, haga lo que haga la imagen.
+
+Cómo funciona, por dentro:
+
+1. La malla se indexa (`to_indexed_mesh`): vértices únicos + caras, no el
+   *soup* de triángulos repetidos con el que trabaja el resto del repo.
+2. Cada vértice se proyecta esféricamente alrededor del **centroide de sus
+   propios vértices** — igual que la esfera de `lito.py` (Z arriba, longitud 0
+   mirando hacia −Y), pero aplicado a una malla suelta en vez de a una rejilla
+   regular. En formas muy asimétricas el centroide no coincide con el centro
+   geométrico «intuitivo»; para casi cualquier objeto convexo razonable no se
+   nota.
+3. La imagen no envuelve la pieza entera —eso solo tiene sentido para un
+   patrón repetible—: se coloca como un **medallón centrado**
+   (`--center-lat`/`--center-lon`, `--height`), con un desvanecido
+   (`--feather`) en el borde para que no quede un escalón visible. Fuera del
+   medallón la superficie no se toca.
+4. Cada vértice se desplaza a lo largo de su **propia normal** (media de las
+   normales de las caras que lo tocan, ponderada por área) hacia fuera, la
+   cantidad que marque el gris de la imagen en ese punto —oscuro = más bulto,
+   por defecto, como en todo el repo.
+
+Es un desplazamiento puro, sin tocar la conectividad: si el STL de origen era
+cerrado, el resultado también lo es. Lo único que no se comprueba es si el
+bulto es tan grande que la superficie se pliega sobre sí misma en una zona
+cóncava o muy fina —eso `check_mesh` no lo detecta, solo mira aristas y
+orientación— así que conviene revisar el resultado antes de imprimir,
+especialmente con `--max-bump` alto sobre una forma poco convexa.
+
+Ejemplo completo, con una forma de huevo escrita a mano (no generada por
+`lito.py`, a propósito) en
+[examples/emboss_demo.py](examples/emboss_demo.py).
 
 ### El editor local
 
