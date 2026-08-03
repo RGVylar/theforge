@@ -19,8 +19,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from theforge.studio import crear_servidor, nombre_seguro, ruta_segura
-from theforge.studio import ErrorPeticion
+from theforge.studio import EXTENSIONES_IMAGEN, ErrorPeticion, crear_servidor, nombre_seguro, ruta_segura
 
 
 @pytest.fixture
@@ -94,6 +93,17 @@ def test_nombres_de_subida_invalidos(malo):
         nombre_seguro(malo)
 
 
+def test_avif_se_admite_si_pillow_sabe_abrirlo():
+    """Regresion: la lista fija anterior no incluia avif, aunque Pillow >= 11.3
+    ya lo abre de forma nativa. Aqui no se supone la version, se pregunta."""
+    from PIL import Image, features
+
+    if not features.check("avif"):
+        pytest.skip("este Pillow no trae soporte AVIF")
+    assert ".avif" in EXTENSIONES_IMAGEN
+    nombre_seguro("foto.avif")  # no debe lanzar
+
+
 @pytest.mark.parametrize(
     "enviado,esperado",
     [
@@ -157,6 +167,9 @@ def test_estilos_e_imagenes(cliente):
     estilos = json.loads(cuerpo)
     assert "acanthus" in estilos["patrones"]
     assert "sphere" in estilos["formas"]
+    # Las extensiones salen de lo que Pillow sabe abrir en esta maquina, no de
+    # una lista escrita a mano que se desincroniza cuando Pillow suma formatos.
+    assert set(estilos["extensiones"]) == EXTENSIONES_IMAGEN
 
     _, _, cuerpo = cliente("GET", "/api/imagenes")
     # Recursivo y con separadores de URL, no de Windows.

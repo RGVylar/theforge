@@ -38,7 +38,23 @@ from theforge.stl import check_mesh, mesh_volume, triangle_normals
 WEB = Path(__file__).parent / "studio_web"
 CUERPO_MAXIMO = 64 * 1024 * 1024  # 64 MB: una foto grande cabe, un disparate no
 DENSIDAD_PLA = 1.24  # g/cm3
-EXTENSIONES_IMAGEN = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"})
+
+
+def _extensiones_de_imagen() -> frozenset[str]:
+    """Lo que Pillow sabe abrir de verdad, en vez de una lista fija a mano.
+
+    Una lista escrita aqui se desincroniza de la instalacion real: en cuanto
+    Pillow suma un formato (como paso con AVIF en la 11.3), quedarse con una
+    lista vieja rechaza ficheros que el propio Pillow ya sabe leer.
+    """
+    Image.init()
+    return frozenset(
+        ext for ext, formato in Image.registered_extensions().items()
+        if formato in Image.OPEN
+    )
+
+
+EXTENSIONES_IMAGEN = _extensiones_de_imagen()
 
 # En Windows mimetypes lee del registro, y ahi .js suele estar como text/plain.
 # Un modulo ES servido como text/plain lo rechaza el navegador, asi que estos
@@ -125,6 +141,7 @@ def api_estilos() -> dict:
         "patrones": list(STYLES),
         "formas": ["flat", "cylindrical", "sphere"],
         "mascaras": ["circle", "rect"],
+        "extensiones": sorted(EXTENSIONES_IMAGEN),
     }
 
 

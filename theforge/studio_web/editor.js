@@ -391,6 +391,17 @@ async function inicio() {
     '<option value="__imagen__">imagen propia…</option>';
   $("capa-mask").innerHTML = est.mascaras.map((m) => `<option>${m}</option>`).join("");
 
+  // Las extensiones salen de lo que Pillow sabe abrir de verdad en esta
+  // maquina, no de una lista fija: asi el dialogo de "abrir fichero" nunca
+  // ofrece un formato que el servidor luego vaya a rechazar.
+  const acepta = est.extensiones.join(",");
+  $("subir").accept = acepta;
+  $("subir-fondo").accept = acepta;
+  $("formatos-admitidos").textContent =
+    `Formatos: ${est.extensiones.map((e) => e.slice(1)).join(", ")} · hasta 64 MB. ` +
+    `Tras importar, el selector vuelve a «Ningún archivo» a propósito, ` +
+    `para poder reimportar el mismo. Mira la barra de abajo.`;
+
   await recargarImagenes();
   sincronizarPanel();
   visor = crearVisor($("visor"));
